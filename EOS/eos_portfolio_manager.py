@@ -64,7 +64,7 @@ class DailySnapshot:
 class EOSPortfolioManager:
     """
     Portfolio Manager - Central database for EOS trading system.
-    
+
     Features:
     - SQLite database for persistent storage
     - Trade history tracking
@@ -74,25 +74,25 @@ class EOSPortfolioManager:
     - Risk metrics calculation
     - Export to JSON/CSV
     """
-    
+
     def __init__(self, db_path: str = None):
         """Initialize Portfolio Manager with database connection."""
         if db_path is None:
             # Default to EOS folder
             eos_dir = Path(__file__).parent
             db_path = str(eos_dir / "portfolio.db")
-        
+
         self.db_path = db_path
         self.conn = None
         self.current_backtest_id = None
         self._init_database()
-    
+
     def _init_database(self):
         """Initialize SQLite database with required tables."""
         self.conn = sqlite3.connect(self.db_path)
         self.conn.row_factory = sqlite3.Row
         cursor = self.conn.cursor()
-        
+
         # Backtests table - tracks each backtest run
         cursor.execute("""
             CREATE TABLE IF NOT EXISTS backtests (
@@ -111,7 +111,7 @@ class EOSPortfolioManager:
                 config_json TEXT
             )
         """)
-        
+
         # Trades table - all individual trades
         cursor.execute("""
             CREATE TABLE IF NOT EXISTS trades (
@@ -140,7 +140,7 @@ class EOSPortfolioManager:
                 FOREIGN KEY (backtest_id) REFERENCES backtests(backtest_id)
             )
         """)
-        
+
         # Daily snapshots table
         cursor.execute("""
             CREATE TABLE IF NOT EXISTS daily_snapshots (
@@ -160,7 +160,7 @@ class EOSPortfolioManager:
                 UNIQUE(backtest_id, date)
             )
         """)
-        
+
         # Positions table - open positions tracking
         cursor.execute("""
             CREATE TABLE IF NOT EXISTS positions (
@@ -182,7 +182,29 @@ class EOSPortfolioManager:
                 FOREIGN KEY (backtest_id) REFERENCES backtests(backtest_id)
             )
         """)
-        
+
+        # Validation logs table - AI validation decisions
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS validation_logs (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                backtest_id TEXT,
+                timestamp TEXT NOT NULL,
+                symbol TEXT NOT NULL,
+                signal_type TEXT,
+                result TEXT NOT NULL,
+                confidence REAL,
+                reason TEXT,
+                tier_used TEXT,
+                latency_ms INTEGER,
+                tokens_used INTEGER,
+                price_change_pct REAL,
+                oi_change_pct REAL,
+                entry_price REAL,
+                created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+                FOREIGN KEY (backtest_id) REFERENCES backtests(backtest_id)
+            )
+        """)
+
         self.conn.commit()
 
     # ===== BACKTEST MANAGEMENT =====
@@ -260,6 +282,40 @@ class EOSPortfolioManager:
 
         self.conn.commit()
         self.current_backtest_id = None
+
+    # ===== VALIDATION LOGGING =====
+
+    def record_validation(self, backtest_id: str, symbol: str, signal_type: str,
+                          result: str, confidence: float, reason: str, tier_used: str,
+                          latency_ms: int = 0, tokens_used: int = 0,
+                          price_change_pct: float = 0, oi_change_pct: float = 0,
+                          entry_price: float = 0):
+        """Record an AI validation decision to the database."""
+        from datetime import datetime
+        cursor = self.conn.cursor()
+        cursor.execute("""
+            INSERT INTO validation_logs
+                (backtest_id, timestamp, symbol, signal_type, result, confidence,
+                 reason, tier_used, latency_ms, tokens_used,
+                 price_change_pct, oi_change_pct, entry_price)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """, (
+            backtest_id,
+            datetime.now().isoformat(),
+            symbol,
+            signal_type,
+            result,
+            confidence,
+            reason,
+            tier_used,
+            latency_ms,
+            tokens_used,
+            price_change_pct,
+            oi_change_pct,
+            entry_price
+        ))
+        self.conn.commit()
+        return cursor.lastrowid
 
     # ===== TRADE MANAGEMENT =====
 
@@ -852,4 +908,3 @@ class EOSPortfolioManager:
         print("\n" + "█" * 80)
         print("█" + " " * 28 + "END OF BACKTEST REPORT" + " " * 28 + "█")
         print("█" * 80 + "\n")
-

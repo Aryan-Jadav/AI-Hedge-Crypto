@@ -12,9 +12,10 @@ import os
 from typing import Dict, Any
 
 # ===== DHAN API CONFIGURATION =====
-# Try to load from environment variables first, fall back to hardcoded values
-DHAN_CLIENT_ID = os.getenv("DHAN_CLIENT_ID", "1108815651")
-DHAN_ACCESS_TOKEN = os.getenv("DHAN_ACCESS_TOKEN", "eyJ0eXAiOiJKV1QiLCJhbGciOiJIUzUxMiJ9.eyJpc3MiOiJkaGFuIiwicGFydG5lcklkIjoiIiwiZXhwIjoxNzcwMzExNTA3LCJpYXQiOjE3NzAyMjUxMDcsInRva2VuQ29uc3VtZXJUeXBlIjoiU0VMRiIsIndlYmhvb2tVcmwiOiIiLCJkaGFuQ2xpZW50SWQiOiIxMTA4ODE1NjUxIn0.iZXpo6Z42WqVuMEPczXQSPDEXgP3y699_OK_hLdsugl8_dgnpC_7Akeh-IniThQ29xyd6F4buNYsotqfwFgexQ")
+# Load credentials from environment variables.
+# SECURITY: do not hardcode real credentials in the repository.
+DHAN_CLIENT_ID = os.getenv("DHAN_CLIENT_ID", "")
+DHAN_ACCESS_TOKEN = os.getenv("DHAN_ACCESS_TOKEN", "")
 API_BASE_URL = "https://api.dhan.co/v2"
 
 # ===== EOS STRATEGY PARAMETERS =====
@@ -22,33 +23,33 @@ EOS_CONFIG = {
     # Entry Thresholds
     "price_change_threshold": 2.0,      # >2% price change from prev day close
     "oi_change_threshold": 1.75,        # >1.75% OI change from prev day close
-    
+
     # Time Settings
     "candle_interval": "5",             # 5-minute candles (aggregate 2 for 10-min)
     "market_open": "09:15",
     "market_close": "15:30",
     "final_exit_time": "15:18",         # 3:18 PM - final exit
     "sma_active_after_minutes": 60,     # SMA exit active after 1 hour from entry
-    
+
     # SMA Settings (calculated on FUTURES price)
     "sma_fast": 8,                      # 8-period SMA
     "sma_slow": 20,                     # 20-period SMA
-    
+
     # Risk Management
     "initial_stop_loss_pct": 30.0,      # 30% of option purchase price
     "trailing_sl_trigger": 10.0,        # Trail SL by ₹10 for every ₹10 move
     "trailing_sl_amount": 10.0,
-    
+
     # Position Sizing
     "lots_per_trade": 1,
     "max_trades_per_day": 5,
     "max_loss_per_day": 25000,          # ₹25,000 max loss per day
     "total_capital": 500000,            # ₹5,00,000 total capital
-    
+
     # Strike Selection
     "strike_selection": "NEAREST_OTM",  # 1 strike out-of-the-money
     "expiry_type": "MONTH",             # Monthly expiry only
-    
+
     # Re-entry Rules
     "allow_reentry": False,             # No re-entry after stop loss
 }
@@ -100,4 +101,3 @@ INSTRUMENTS = {
     "OPTSTK": "OPTSTK",
     "OPTIDX": "OPTIDX",
 }
-

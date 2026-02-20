@@ -1,0 +1,649 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>EOS Dashboard</title>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body {
+            background: #0a0a0f;
+            color: #e0e0e0;
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            min-height: 100vh;
+        }
+
+        /* Header */
+        .header {
+            display: flex; justify-content: space-between; align-items: center;
+            padding: 20px 32px;
+            border-bottom: 1px solid #1a1a2e;
+        }
+        .header h1 { font-size: 20px; font-weight: 600; color: #fff; }
+        .header h1 span { color: #7c3aed; }
+        .header-right { display: flex; align-items: center; gap: 16px; }
+        .session-select {
+            background: #12121a; color: #e0e0e0; border: 1px solid #2a2a3e;
+            padding: 8px 14px; border-radius: 8px; font-size: 13px; cursor: pointer;
+            min-width: 220px;
+        }
+        .session-select:focus { outline: none; border-color: #7c3aed; }
+        .refresh-btn {
+            background: #7c3aed; color: #fff; border: none; padding: 8px 18px;
+            border-radius: 8px; font-size: 13px; cursor: pointer; font-weight: 500;
+        }
+        .refresh-btn:hover { background: #6d28d9; }
+
+        /* Main Layout */
+        .main { padding: 24px 32px; }
+
+        /* Stats Cards Row */
+        .stats-row {
+            display: grid; grid-template-columns: repeat(4, 1fr); gap: 16px;
+            margin-bottom: 24px;
+        }
+        .stat-card {
+            background: #12121a; border: 1px solid #1a1a2e; border-radius: 12px;
+            padding: 20px; position: relative; overflow: hidden;
+        }
+        .stat-card::before {
+            content: ''; position: absolute; top: 0; left: 0; right: 0; height: 2px;
+        }
+        .stat-card:nth-child(1)::before { background: #7c3aed; }
+        .stat-card:nth-child(2)::before { background: #10b981; }
+        .stat-card:nth-child(3)::before { background: #f59e0b; }
+        .stat-card:nth-child(4)::before { background: #3b82f6; }
+        .stat-label { font-size: 12px; color: #6b7280; text-transform: uppercase; letter-spacing: 0.5px; margin-bottom: 8px; }
+        .stat-value { font-size: 28px; font-weight: 700; color: #fff; }
+        .stat-sub { font-size: 13px; margin-top: 6px; }
+        .green { color: #10b981; }
+        .red { color: #ef4444; }
+
+        /* Chart Section */
+        .chart-section {
+            background: #12121a; border: 1px solid #1a1a2e; border-radius: 12px;
+            padding: 24px; margin-bottom: 24px;
+        }
+        .section-title {
+            font-size: 16px; font-weight: 600; color: #fff; margin-bottom: 16px;
+            display: flex; justify-content: space-between; align-items: center;
+        }
+        .chart-container { position: relative; height: 300px; }
+
+        /* Two Column Layout */
+        .two-col { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; margin-bottom: 24px; }
+
+        /* Positions & Trades */
+        .panel {
+            background: #12121a; border: 1px solid #1a1a2e; border-radius: 12px;
+            padding: 20px; max-height: 420px; overflow-y: auto;
+        }
+        .panel::-webkit-scrollbar { width: 4px; }
+        .panel::-webkit-scrollbar-thumb { background: #2a2a3e; border-radius: 4px; }
+
+        .position-item, .trade-item {
+            display: flex; justify-content: space-between; align-items: center;
+            padding: 12px 0; border-bottom: 1px solid #1a1a2e;
+        }
+        .position-item:last-child, .trade-item:last-child { border-bottom: none; }
+        .item-left { display: flex; flex-direction: column; gap: 4px; }
+        .item-symbol { font-weight: 600; font-size: 14px; color: #fff; }
+        .item-meta { font-size: 12px; color: #6b7280; }
+        .item-pnl { font-weight: 600; font-size: 14px; text-align: right; }
+        .item-pnl-pct { font-size: 12px; text-align: right; }
+
+        .badge {
+            display: inline-block; padding: 2px 8px; border-radius: 4px;
+            font-size: 11px; font-weight: 500;
+        }
+        .badge-put { background: #ef444420; color: #ef4444; }
+        .badge-call { background: #10b98120; color: #10b981; }
+        .badge-paper { background: #f59e0b20; color: #f59e0b; }
+        .badge-live { background: #3b82f620; color: #3b82f6; }
+        .badge-backtest { background: #7c3aed20; color: #7c3aed; }
+
+        .empty-state {
+            text-align: center; padding: 40px 20px; color: #4b5563; font-size: 14px;
+        }
+
+        /* Controls Bar */
+        .controls-bar {
+            display: flex; align-items: center; gap: 12px; margin-bottom: 24px;
+            background: #12121a; border: 1px solid #1a1a2e; border-radius: 12px;
+            padding: 16px 20px; flex-wrap: wrap;
+        }
+        .controls-bar .ctrl-label {
+            font-size: 13px; font-weight: 600; color: #fff; margin-right: 4px;
+        }
+        .ctrl-btn {
+            padding: 8px 18px; border-radius: 8px; border: none; font-size: 13px;
+            font-weight: 500; cursor: pointer; transition: background 0.15s;
+        }
+        .ctrl-btn:disabled { opacity: 0.5; cursor: not-allowed; }
+        .btn-start { background: #10b981; color: #fff; }
+        .btn-start:hover:not(:disabled) { background: #059669; }
+        .btn-stop { background: #ef4444; color: #fff; }
+        .btn-stop:hover:not(:disabled) { background: #dc2626; }
+        .status-dot {
+            display: inline-block; width: 8px; height: 8px; border-radius: 50%;
+            margin-right: 6px;
+        }
+        .status-dot.running { background: #10b981; box-shadow: 0 0 6px #10b981; }
+        .status-dot.stopped { background: #6b7280; }
+        .ctrl-group { display: flex; align-items: center; gap: 8px; }
+        .ctrl-divider { width: 1px; height: 28px; background: #2a2a3e; margin: 0 8px; }
+
+        /* AI Reasoning Panel */
+        .badge-approve { background: #10b98120; color: #10b981; }
+        .badge-reject { background: #ef444420; color: #ef4444; }
+        .badge-system { background: #6b728020; color: #9ca3af; }
+        .badge-tier { background: #3b82f620; color: #3b82f6; }
+        .validation-item {
+            padding: 12px 0; border-bottom: 1px solid #1a1a2e;
+        }
+        .validation-item:last-child { border-bottom: none; }
+        .val-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 6px; }
+        .val-reason { font-size: 13px; color: #d1d5db; line-height: 1.5; }
+        .val-meta { font-size: 11px; color: #6b7280; margin-top: 4px; }
+
+        /* Sessions Table */
+        .sessions-section {
+            background: #12121a; border: 1px solid #1a1a2e; border-radius: 12px;
+            padding: 20px; margin-bottom: 24px;
+        }
+        table { width: 100%; border-collapse: collapse; }
+        th {
+            text-align: left; padding: 10px 12px; font-size: 12px; color: #6b7280;
+            text-transform: uppercase; letter-spacing: 0.5px; border-bottom: 1px solid #1a1a2e;
+        }
+        td { padding: 12px; font-size: 13px; border-bottom: 1px solid #0f0f18; }
+        tr:hover td { background: #1a1a2e40; }
+        .clickable { cursor: pointer; }
+
+        @media (max-width: 900px) {
+            .stats-row { grid-template-columns: repeat(2, 1fr); }
+            .two-col { grid-template-columns: 1fr; }
+        }
+    </style>
+</head>
+<body>
+    <!-- Header -->
+    <div class="header">
+        <h1><span>EOS</span> Trading Dashboard</h1>
+        <div class="header-right">
+            <select class="session-select" id="sessionSelect" onchange="loadSession()">
+                <option value="">All Sessions</option>
+            </select>
+            <button class="refresh-btn" onclick="refreshAll()">↻ Refresh</button>
+        </div>
+    </div>
+
+    <!-- Main Content -->
+    <div class="main">
+        <!-- Stats Cards -->
+        <div class="stats-row">
+            <div class="stat-card">
+                <div class="stat-label">Portfolio Value</div>
+                <div class="stat-value" id="portfolioValue">₹0</div>
+                <div class="stat-sub" id="portfolioPnl">--</div>
+            </div>
+            <div class="stat-card">
+                <div class="stat-label">Total P&L</div>
+                <div class="stat-value" id="totalPnl">₹0</div>
+                <div class="stat-sub" id="totalPnlPct">--</div>
+            </div>
+            <div class="stat-card">
+                <div class="stat-label">Win Rate</div>
+                <div class="stat-value" id="winRate">0%</div>
+                <div class="stat-sub" id="totalTrades">0 trades</div>
+            </div>
+            <div class="stat-card">
+                <div class="stat-label">Sessions</div>
+                <div class="stat-value" id="totalSessions">0</div>
+                <div class="stat-sub" id="sessionMode">--</div>
+            </div>
+        </div>
+
+        <!-- Controls Bar -->
+        <div class="controls-bar">
+            <span class="ctrl-label">Backtest</span>
+            <div class="ctrl-group">
+                <span class="status-dot stopped" id="btStatusDot"></span>
+                <span id="btStatusText" style="font-size:12px;color:#6b7280">Stopped</span>
+            </div>
+            <button class="ctrl-btn btn-start" id="btnStartBT" onclick="startBacktest()">▶ Start</button>
+            <button class="ctrl-btn btn-stop" id="btnStopBT" onclick="stopProcess('backtest')" disabled>■ Stop</button>
+
+            <div class="ctrl-divider"></div>
+
+            <span class="ctrl-label">Live Test</span>
+            <div class="ctrl-group">
+                <span class="status-dot stopped" id="liveStatusDot"></span>
+                <span id="liveStatusText" style="font-size:12px;color:#6b7280">Stopped</span>
+            </div>
+            <button class="ctrl-btn btn-start" id="btnStartLive" onclick="startLive()">▶ Start</button>
+            <button class="ctrl-btn btn-stop" id="btnStopLive" onclick="stopProcess('live')" disabled>■ Stop</button>
+        </div>
+
+        <!-- Equity Curve Chart -->
+        <div class="chart-section">
+            <div class="section-title">
+                <span>Equity Curve</span>
+            </div>
+            <div class="chart-container">
+                <canvas id="equityChart"></canvas>
+            </div>
+        </div>
+
+        <!-- Positions & Trade History -->
+        <div class="two-col">
+            <div class="panel">
+                <div class="section-title">Open Positions</div>
+                <div id="positionsList">
+                    <div class="empty-state">No open positions</div>
+                </div>
+            </div>
+            <div class="panel">
+                <div class="section-title">Recent Trades</div>
+                <div id="tradesList">
+                    <div class="empty-state">No trades yet</div>
+                </div>
+            </div>
+        </div>
+
+        <!-- AI Reasoning Log -->
+        <div class="panel" style="margin-bottom:24px;max-height:500px">
+            <div class="section-title">
+                <span>🤖 AI Reasoning Log</span>
+                <span style="font-size:12px;color:#6b7280" id="valCount">0 entries</span>
+            </div>
+            <div id="validationsList">
+                <div class="empty-state">No AI validations yet</div>
+            </div>
+        </div>
+
+        <!-- Sessions Table -->
+        <div class="sessions-section">
+            <div class="section-title">Trading Sessions</div>
+            <table>
+                <thead>
+                    <tr>
+                        <th>Session</th>
+                        <th>Date</th>
+                        <th>Mode</th>
+                        <th>Trades</th>
+                        <th>Win Rate</th>
+                        <th>P&L</th>
+                        <th>Capital</th>
+                    </tr>
+                </thead>
+                <tbody id="sessionsTable">
+                    <tr><td colspan="7" class="empty-state">No sessions found</td></tr>
+                </tbody>
+            </table>
+        </div>
+    </div>
+
+<script>
+    /* ===== State ===== */
+    let equityChart = null;
+    let currentSessionId = "";
+
+    /* ===== Formatters ===== */
+    function fmt(n) { return "₹" + Number(n).toLocaleString("en-IN", { minimumFractionDigits: 2, maximumFractionDigits: 2 }); }
+    function pnlClass(n) { return n >= 0 ? "green" : "red"; }
+    function pnlSign(n) { return n >= 0 ? "+" : ""; }
+
+    /* ===== API helpers ===== */
+    async function api(url) {
+        const res = await fetch(url);
+        return res.json();
+    }
+
+    /* ===== Load Overview Stats ===== */
+    async function loadOverview() {
+        const d = await api("/api/overview");
+        document.getElementById("portfolioValue").textContent = fmt(d.current_capital);
+
+        const change = d.current_capital - d.initial_capital;
+        const changePct = d.initial_capital > 0 ? (change / d.initial_capital * 100) : 0;
+        const el = document.getElementById("portfolioPnl");
+        el.textContent = `${pnlSign(change)}${fmt(Math.abs(change))} (${pnlSign(changePct)}${changePct.toFixed(2)}%)`;
+        el.className = "stat-sub " + pnlClass(change);
+
+        document.getElementById("totalPnl").textContent = `${pnlSign(d.total_pnl)}${fmt(Math.abs(d.total_pnl))}`;
+        document.getElementById("totalPnl").className = "stat-value " + pnlClass(d.total_pnl);
+        const pnlPctEl = document.getElementById("totalPnlPct");
+        const pnlPct = d.initial_capital > 0 ? (d.total_pnl / d.initial_capital * 100) : 0;
+        pnlPctEl.textContent = `${pnlSign(pnlPct)}${pnlPct.toFixed(2)}% return`;
+        pnlPctEl.className = "stat-sub " + pnlClass(d.total_pnl);
+
+        document.getElementById("winRate").textContent = d.win_rate.toFixed(1) + "%";
+        document.getElementById("totalTrades").textContent = d.total_trades + " trades";
+        document.getElementById("totalSessions").textContent = d.total_sessions;
+    }
+
+    /* ===== Load Sessions Dropdown & Table ===== */
+    async function loadSessions() {
+        const sessions = await api("/api/sessions");
+        const select = document.getElementById("sessionSelect");
+        // Preserve current selection
+        const cur = select.value;
+        select.innerHTML = '<option value="">All Sessions</option>';
+        sessions.forEach(s => {
+            const opt = document.createElement("option");
+            opt.value = s.backtest_id;
+            const pnl = s.total_pnl != null ? ` (${pnlSign(s.total_pnl)}${fmt(Math.abs(s.total_pnl))})` : "";
+            opt.textContent = `${s.backtest_id}${pnl}`;
+            select.appendChild(opt);
+        });
+        if (cur) select.value = cur;
+
+        // Table
+        const tbody = document.getElementById("sessionsTable");
+        if (sessions.length === 0) {
+            tbody.innerHTML = '<tr><td colspan="7" class="empty-state">No sessions found</td></tr>';
+            return;
+        }
+        tbody.innerHTML = sessions.map(s => {
+            const pnl = s.total_pnl || 0;
+            const wr = s.win_rate != null ? s.win_rate.toFixed(1) + "%" : "--";
+            const modeBadge = s.mode === "PAPER" ? "badge-paper" : s.mode === "LIVE" ? "badge-live" : "badge-backtest";
+            return `<tr class="clickable" onclick="selectSession('${s.backtest_id}')">
+                <td style="color:#fff;font-weight:500">${s.backtest_id}</td>
+                <td>${s.start_date}</td>
+                <td><span class="badge ${modeBadge}">${s.mode}</span></td>
+                <td>${s.total_trades || 0}</td>
+                <td>${wr}</td>
+                <td class="${pnlClass(pnl)}" style="font-weight:600">${pnlSign(pnl)}${fmt(Math.abs(pnl))}</td>
+                <td>${s.final_capital ? fmt(s.final_capital) : "--"}</td>
+            </tr>`;
+        }).join("");
+    }
+
+    function selectSession(id) {
+        document.getElementById("sessionSelect").value = id;
+        loadSession();
+    }
+
+    /* ===== Load Equity Curve ===== */
+    async function loadEquityCurve() {
+        const sid = document.getElementById("sessionSelect").value;
+        const url = sid ? `/api/equity_curve?session_id=${sid}` : "/api/equity_curve";
+        const data = await api(url);
+
+        const labels = data.map(d => d.date);
+        const values = data.map(d => d.ending_capital);
+
+        if (equityChart) equityChart.destroy();
+
+        const ctx = document.getElementById("equityChart").getContext("2d");
+        const gradient = ctx.createLinearGradient(0, 0, 0, 300);
+        const isPositive = values.length > 1 ? values[values.length-1] >= values[0] : true;
+        const lineColor = isPositive ? "#10b981" : "#ef4444";
+        gradient.addColorStop(0, isPositive ? "rgba(16,185,129,0.15)" : "rgba(239,68,68,0.15)");
+        gradient.addColorStop(1, "rgba(10,10,15,0)");
+
+        equityChart = new Chart(ctx, {
+            type: "line",
+            data: {
+                labels: labels,
+                datasets: [{
+                    label: "Capital",
+                    data: values,
+                    borderColor: lineColor,
+                    backgroundColor: gradient,
+                    borderWidth: 2,
+                    fill: true,
+                    tension: 0.3,
+                    pointRadius: values.length < 30 ? 4 : 0,
+                    pointBackgroundColor: lineColor,
+                    pointBorderColor: "#12121a",
+                    pointBorderWidth: 2
+                }]
+            },
+            options: {
+                responsive: true,
+                maintainAspectRatio: false,
+                plugins: {
+                    legend: { display: false },
+                    tooltip: {
+                        backgroundColor: "#1a1a2e",
+                        titleColor: "#fff",
+                        bodyColor: "#e0e0e0",
+                        borderColor: "#2a2a3e",
+                        borderWidth: 1,
+                        callbacks: { label: (ctx) => fmt(ctx.raw) }
+                    }
+                },
+                scales: {
+                    x: {
+                        grid: { color: "#1a1a2e" },
+                        ticks: { color: "#6b7280", font: { size: 11 } }
+                    },
+                    y: {
+                        grid: { color: "#1a1a2e" },
+                        ticks: {
+                            color: "#6b7280", font: { size: 11 },
+                            callback: (v) => "₹" + (v/1000).toFixed(0) + "K"
+                        }
+                    }
+                }
+            }
+        });
+    }
+
+    /* ===== Load Positions ===== */
+    async function loadPositions() {
+        const sid = document.getElementById("sessionSelect").value;
+        const url = sid ? `/api/positions?session_id=${sid}` : "/api/positions";
+        const positions = await api(url);
+        const container = document.getElementById("positionsList");
+
+        if (positions.length === 0) {
+            container.innerHTML = '<div class="empty-state">No open positions</div>';
+            return;
+        }
+
+        container.innerHTML = positions.map(p => {
+            const pnl = p.unrealized_pnl || 0;
+            const pnlPct = p.entry_price > 0 ? ((p.current_price - p.entry_price) / p.entry_price * 100) : 0;
+            const typeBadge = p.option_type === "PUT" ? "badge-put" : "badge-call";
+            return `<div class="position-item">
+                <div class="item-left">
+                    <div class="item-symbol">${p.symbol} <span class="badge ${typeBadge}">${p.option_type}</span></div>
+                    <div class="item-meta">Entry: ${fmt(p.entry_price)} | Qty: ${p.quantity}</div>
+                </div>
+                <div>
+                    <div class="item-pnl ${pnlClass(pnl)}">${pnlSign(pnl)}${fmt(Math.abs(pnl))}</div>
+                    <div class="item-pnl-pct ${pnlClass(pnlPct)}">${pnlSign(pnlPct)}${pnlPct.toFixed(2)}%</div>
+                </div>
+            </div>`;
+        }).join("");
+    }
+    /* ===== Load Recent Trades ===== */
+    async function loadTrades() {
+        const sid = document.getElementById("sessionSelect").value;
+        const url = sid ? `/api/trades?session_id=${sid}` : "/api/trades";
+        const trades = await api(url);
+        const container = document.getElementById("tradesList");
+
+        if (trades.length === 0) {
+            container.innerHTML = '<div class="empty-state">No trades yet</div>';
+            return;
+        }
+
+        container.innerHTML = trades.slice(0, 20).map(t => {
+            const pnl = t.pnl || 0;
+            const pnlPct = t.pnl_pct || 0;
+            const typeBadge = t.option_type === "PUT" ? "badge-put" : "badge-call";
+            return `<div class="trade-item">
+                <div class="item-left">
+                    <div class="item-symbol">${t.symbol} <span class="badge ${typeBadge}">${t.option_type}</span></div>
+                    <div class="item-meta">${t.entry_date} ${t.entry_time || ""} → ${t.exit_time || ""} | ${t.exit_reason || ""}</div>
+                </div>
+                <div>
+                    <div class="item-pnl ${pnlClass(pnl)}">${pnlSign(pnl)}${fmt(Math.abs(pnl))}</div>
+                    <div class="item-pnl-pct ${pnlClass(pnlPct)}">${pnlSign(pnlPct)}${pnlPct.toFixed(2)}%</div>
+                </div>
+            </div>`;
+        }).join("");
+    }
+
+    /* ===== Load Session (when dropdown changes) ===== */
+    async function loadSession() {
+        currentSessionId = document.getElementById("sessionSelect").value;
+        const modeEl = document.getElementById("sessionMode");
+
+        if (currentSessionId) {
+            const detail = await api(`/api/session/${currentSessionId}`);
+            const s = detail.session;
+            const config = s.config_json ? JSON.parse(s.config_json) : {};
+            modeEl.textContent = (config.mode || "BACKTEST") + " mode";
+
+            // Update stats for this session
+            document.getElementById("portfolioValue").textContent = fmt(s.final_capital || s.initial_capital);
+            const pnl = s.total_pnl || 0;
+            const pnlPct = s.initial_capital > 0 ? (pnl / s.initial_capital * 100) : 0;
+            const pnlEl = document.getElementById("portfolioPnl");
+            pnlEl.textContent = `${pnlSign(pnl)}${fmt(Math.abs(pnl))} (${pnlSign(pnlPct)}${pnlPct.toFixed(2)}%)`;
+            pnlEl.className = "stat-sub " + pnlClass(pnl);
+
+            document.getElementById("totalPnl").textContent = `${pnlSign(pnl)}${fmt(Math.abs(pnl))}`;
+            document.getElementById("totalPnl").className = "stat-value " + pnlClass(pnl);
+
+            document.getElementById("winRate").textContent = (s.win_rate || 0).toFixed(1) + "%";
+            document.getElementById("totalTrades").textContent = (s.total_trades || 0) + " trades";
+            document.getElementById("totalSessions").textContent = "1";
+        } else {
+            modeEl.textContent = "--";
+            await loadOverview();
+        }
+
+        await Promise.all([loadEquityCurve(), loadPositions(), loadTrades(), loadValidations()]);
+    }
+
+    /* ===== Load AI Validations ===== */
+    async function loadValidations() {
+        const sid = document.getElementById("sessionSelect").value;
+        const url = sid ? `/api/validations?session_id=${sid}` : "/api/validations";
+        const logs = await api(url);
+        const container = document.getElementById("validationsList");
+        document.getElementById("valCount").textContent = logs.length + " entries";
+
+        if (logs.length === 0) {
+            container.innerHTML = '<div class="empty-state">No AI validations yet</div>';
+            return;
+        }
+
+        container.innerHTML = logs.map(v => {
+            const resultBadge = v.result === "APPROVE" ? "badge-approve" : "badge-reject";
+            const tierBadge = "badge-tier";
+            const ts = v.timestamp ? new Date(v.timestamp).toLocaleString() : "";
+            const priceStr = v.price_change_pct ? `${v.price_change_pct > 0 ? "+" : ""}${v.price_change_pct.toFixed(2)}%` : "";
+            const oiStr = v.oi_change_pct ? `${v.oi_change_pct > 0 ? "+" : ""}${v.oi_change_pct.toFixed(2)}%` : "";
+            return `<div class="validation-item">
+                <div class="val-header">
+                    <div>
+                        <span class="item-symbol">${v.symbol}</span>
+                        <span class="badge ${v.signal_type === 'PUT' ? 'badge-put' : 'badge-call'}">${v.signal_type || '--'}</span>
+                        <span class="badge ${resultBadge}">${v.result}</span>
+                        <span class="badge ${tierBadge}">${v.tier_used || ''}</span>
+                    </div>
+                    <span style="font-size:11px;color:#6b7280">${ts}</span>
+                </div>
+                <div class="val-reason">${v.reason || 'No reason'}</div>
+                <div class="val-meta">
+                    ${v.confidence != null ? `Confidence: ${(v.confidence * 100).toFixed(0)}%` : ''}
+                    ${v.entry_price ? ` | Entry: ${fmt(v.entry_price)}` : ''}
+                    ${priceStr ? ` | Price Δ: ${priceStr}` : ''}
+                    ${oiStr ? ` | OI Δ: ${oiStr}` : ''}
+                    ${v.latency_ms ? ` | ${v.latency_ms}ms` : ''}
+                </div>
+            </div>`;
+        }).join("");
+    }
+
+    /* ===== Start / Stop Controls ===== */
+    async function loadStatus() {
+        const d = await api("/api/status");
+
+        // Backtest status
+        const btDot = document.getElementById("btStatusDot");
+        const btText = document.getElementById("btStatusText");
+        const btnStartBT = document.getElementById("btnStartBT");
+        const btnStopBT = document.getElementById("btnStopBT");
+        btDot.className = "status-dot " + (d.backtest_running ? "running" : "stopped");
+        btText.textContent = d.backtest_running ? "Running" : "Stopped";
+        btText.style.color = d.backtest_running ? "#10b981" : "#6b7280";
+        btnStartBT.disabled = d.backtest_running;
+        btnStopBT.disabled = !d.backtest_running;
+
+        // Live status
+        const liveDot = document.getElementById("liveStatusDot");
+        const liveText = document.getElementById("liveStatusText");
+        const btnStartLive = document.getElementById("btnStartLive");
+        const btnStopLive = document.getElementById("btnStopLive");
+        liveDot.className = "status-dot " + (d.live_running ? "running" : "stopped");
+        liveText.textContent = d.live_running ? "Running" : "Stopped";
+        liveText.style.color = d.live_running ? "#10b981" : "#6b7280";
+        btnStartLive.disabled = d.live_running;
+        btnStopLive.disabled = !d.live_running;
+    }
+
+    async function startBacktest() {
+        const symbols = prompt("Symbols (comma-separated):", "RELIANCE,TATASTEEL");
+        if (!symbols) return;
+        const startDate = prompt("Start date (YYYY-MM-DD, blank for 30d ago):", "");
+        const endDate = prompt("End date (YYYY-MM-DD, blank for today):", "");
+        const body = { symbols: symbols.split(",").map(s => s.trim()) };
+        if (startDate) body.start_date = startDate;
+        if (endDate) body.end_date = endDate;
+
+        const res = await fetch("/api/start_backtest", {
+            method: "POST", headers: {"Content-Type": "application/json"},
+            body: JSON.stringify(body)
+        });
+        const d = await res.json();
+        if (d.error) alert("Error: " + d.error);
+        else { loadStatus(); }
+    }
+
+    async function startLive() {
+        const symbols = prompt("Symbols (comma-separated):", "RELIANCE,TATASTEEL");
+        if (!symbols) return;
+        const capital = prompt("Initial capital:", "500000");
+        const body = {
+            symbols: symbols.split(",").map(s => s.trim()),
+            initial_capital: parseFloat(capital) || 500000
+        };
+
+        const res = await fetch("/api/start_live", {
+            method: "POST", headers: {"Content-Type": "application/json"},
+            body: JSON.stringify(body)
+        });
+        const d = await res.json();
+        if (d.error) alert("Error: " + d.error);
+        else { loadStatus(); }
+    }
+
+    async function stopProcess(type) {
+        const res = await fetch(`/api/stop/${type}`, { method: "POST" });
+        const d = await res.json();
+        loadStatus();
+    }
+
+    /* ===== Refresh All ===== */
+    async function refreshAll() {
+        await Promise.all([loadOverview(), loadSessions(), loadStatus()]);
+        await Promise.all([loadEquityCurve(), loadPositions(), loadTrades(), loadValidations()]);
+    }
+
+    /* ===== Init ===== */
+    refreshAll();
+    // Auto-refresh every 30 seconds
+    setInterval(refreshAll, 30000);
+</script>
+</body>
+</html>

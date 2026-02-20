@@ -2,8 +2,8 @@
 
 ## Complete Trading Strategy Documentation
 
-**Version:** 1.0
-**Last Updated:** February 4, 2025
+**Version:** 1.1
+**Last Updated:** February 5, 2026
 **Strategy Type:** Intraday Options (Mean Reversion / Contrarian)
 **Strategy Code:** EOS
 
@@ -24,6 +24,7 @@
 11. [Complete Trade Flow Examples](#11-complete-trade-flow-examples)
 12. [Quick Reference Cheat Sheet](#12-quick-reference-cheat-sheet)
 13. [Implementation Checklist](#13-implementation-checklist)
+14. [Live Trading System](#14-live-trading-system)
 
 ---
 
@@ -124,21 +125,21 @@ It often indicates:
 ```python
 # Pseudo-code for entry screening
 def check_entry_conditions(stock, current_candle):
-    
+
     # Condition 1: Must be FNO stock
     is_fno = stock in FNO_STOCK_LIST
-    
+
     # Condition 2: OI change > 1.75% from previous day close
     oi_change_pct = (current_oi - prev_day_close_oi) / prev_day_close_oi * 100
     oi_condition = oi_change_pct > 1.75
-    
+
     # Condition 3: Price change > 2% from previous day close
     price_change_pct = (current_price - prev_day_close) / prev_day_close * 100
     price_condition = abs(price_change_pct) > 2.0
-    
+
     # Condition 4: Not in no-entry zone
     time_condition = current_time > "09:25"
-    
+
     return is_fno and oi_condition and price_condition and time_condition
 ```
 
@@ -865,13 +866,148 @@ SMA Gap % = |8-SMA - 20-SMA| / 20-SMA × 100
 
 ---
 
+## 14. Live Trading System
+
+### Architecture Overview
+
+The EOS Live Trading System uses **WebSocket** for real-time market data instead of REST API polling, enabling instant signal detection across all FNO stocks simultaneously. It also integrates with the **Option Chain API** for real option prices.
+
+```
+┌─────────────────┐     ┌──────────────────┐     ┌─────────────────┐
+│  Dhan WebSocket │────▶│  EOSLiveRunner   │────▶│   Risk Manager  │
+│  (Real-time)    │     │  (Signal Engine) │     │   + Portfolio   │
+└─────────────────┘     └──────────────────┘     └─────────────────┘
+         │                       │                        │
+         ▼                       ▼                        ▼
+   Real-time LTP          Entry/Exit           Trade Recording
+   Real-time OI           Trailing SL          Daily P&L Tracking
+   Previous Close         SMA Monitoring       Position Management
+         │                       │
+         ▼                       ▼
+┌─────────────────┐     ┌──────────────────┐
+│  Option Chain   │────▶│  Real Option     │
+│  Manager        │     │  Prices (ATM)    │
+└─────────────────┘     └──────────────────┘
+```
+
+### Key Components
+
+| Component | File | Description |
+|-----------|------|-------------|
+| WebSocket Feed | `eos_websocket_feed.py` | Real-time market data via Dhan WebSocket |
+| Live Runner | `eos_live_runner.py` | Main trading loop, signal detection, position management |
+| **Option Chain Manager** | `eos_option_chain.py` | **Real option prices, ATM strike identification** |
+| Risk Manager | `eos_risk_manager.py` | Daily limits, position sizing |
+| Portfolio Manager | `eos_portfolio_manager.py` | Trade recording, SQLite storage |
+
+### Why WebSocket vs REST API?
+
+| Approach | Time to Scan 100 Stocks | Issues |
+|----------|------------------------|--------|
+| REST API Polling | 25+ seconds (250ms × 100) | Miss fast-moving entry windows |
+| **WebSocket** | **Instant** (push-based) | ✅ All stocks updated simultaneously |
+
+### Pre-Market Setup (9:10 AM)
+
+1. **Pre-fetch previous close data** via REST API (~3-5 seconds)
+2. **Connect WebSocket** to `wss://api-feed.dhan.co` (~1 second)
+3. **Subscribe to all FNO stocks** (~1 second)
+4. **Ready for 9:15 AM market open**
+
+### Usage Example
+
+```python
+from EOS.eos_live_runner import EOSLiveRunner
+
+# Create runner with subset of stocks
+runner = EOSLiveRunner(
+    symbols=["RELIANCE", "HDFCBANK", "ICICIBANK", "TCS", "INFY"],
+    initial_capital=500000,
+    paper_trade=True  # Set False for live trading
+)
+
+# Start the runner
+runner.start()
+
+# Monitor status
+runner.print_status()
+
+# Stop when done
+runner.stop()
+```
+
+### Testing Commands
+
+```bash
+# Quick WebSocket test (no market hours check)
+python -m EOS.test_live_runner --quick
+
+# Full live runner test (1 minute)
+python -m EOS.test_live_runner
+```
+
+### Live Runner States
+
+| State | Description |
+|-------|-------------|
+| INITIALIZING | Setting up WebSocket connection |
+| PRE_MARKET | Waiting for 9:15 AM |
+| MARKET_OPEN | Active signal detection and position monitoring |
+| MARKET_CLOSED | After 3:30 PM, daily summary printed |
+| STOPPED | Runner stopped |
+
+### Paper Trade Mode
+
+When `paper_trade=True`:
+- No actual orders placed
+- **Real option prices** from Option Chain API and WebSocket
+- Full signal detection and position logic runs
+- Use for testing before going live
+
+### Option Chain Integration
+
+The live runner uses **real option prices** (not simulated):
+
+| Stage | Data Source | Description |
+|-------|-------------|-------------|
+| **Entry** | Option Chain API | Fetches ATM strike and real option LTP |
+| **Monitoring** | WebSocket Feed | Real-time option price updates |
+| **Exit** | WebSocket/API | Real option LTP for P&L calculation |
+
+**Key Features:**
+- **ATM Strike Identification**: Automatically finds the At-The-Money strike based on spot price
+- **Security ID Lookup**: Uses `api-scrip-master.csv` (86,449 option instruments) for WebSocket subscription
+- **Dynamic Subscription**: Subscribes to option instruments when position is opened
+- **Rate Limiting**: Option Chain API limited to 1 request per 3 seconds
+
+### Test Scripts
+
+All test scripts are located in `EOS/eos_test_scripts/`:
+
+```bash
+# Quick WebSocket test
+python -m EOS.eos_test_scripts.test_live_runner --quick
+
+# Full live runner test
+python -m EOS.eos_test_scripts.test_live_runner
+
+# Option chain test
+python -m EOS.eos_test_scripts.test_option_chain
+
+# WebSocket feed test
+python -m EOS.eos_test_scripts.test_websocket_feed
+```
+
+---
+
 ## Version History
 
 | Version | Date | Changes |
 |---------|------|---------|
+| 1.2 | 2026-02-05 | Added Option Chain integration for real option prices, organized test scripts |
+| 1.1 | 2026-02-05 | Added Live Trading System with WebSocket integration |
 | 1.0 | 2025-02-04 | Initial documentation |
 
 ---
 
 **Document End**
-

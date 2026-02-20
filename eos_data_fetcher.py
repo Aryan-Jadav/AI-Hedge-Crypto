@@ -23,6 +23,7 @@ Author: AI Assistant
 Date: February 4, 2025
 """
 
+import os
 import requests
 from typing import Dict, Any, List, Optional, Tuple
 from datetime import datetime, timedelta
@@ -31,8 +32,9 @@ import time
 import pandas as pd
 
 # ===== CONFIGURATION =====
-DHAN_CLIENT_ID = "1108815651"
-DHAN_ACCESS_TOKEN = "eyJ0eXAiOiJKV1QiLCJhbGciOiJIUzUxMiJ9.eyJpc3MiOiJkaGFuIiwicGFydG5lcklkIjoiIiwiZXhwIjoxNzcwMzExNTA3LCJpYXQiOjE3NzAyMjUxMDcsInRva2VuQ29uc3VtZXJUeXBlIjoiU0VMRiIsIndlYmhvb2tVcmwiOiIiLCJkaGFuQ2xpZW50SWQiOiIxMTA4ODE1NjUxIn0.iZXpo6Z42WqVuMEPczXQSPDEXgP3y699_OK_hLdsugl8_dgnpC_7Akeh-IniThQ29xyd6F4buNYsotqfwFgexQ"
+# SECURITY: load credentials from environment variables (do not hardcode)
+DHAN_CLIENT_ID = os.getenv("DHAN_CLIENT_ID", "")
+DHAN_ACCESS_TOKEN = os.getenv("DHAN_ACCESS_TOKEN", "")
 
 API_BASE_URL = "https://api.dhan.co/v2"
 

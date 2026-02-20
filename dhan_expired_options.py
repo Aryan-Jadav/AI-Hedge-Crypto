@@ -14,14 +14,16 @@ Requirements:
     pip install --pre dhanhq  # Optional: for other Dhan API features
 """
 
+import os
 import requests
 from typing import Optional, List, Dict, Any
 from datetime import datetime, timedelta
 import json
 
 # ===== CONFIGURATION =====
-DHAN_CLIENT_ID = "1108815651"
-DHAN_ACCESS_TOKEN = "eyJ0eXAiOiJKV1QiLCJhbGciOiJIUzUxMiJ9.eyJpc3MiOiJkaGFuIiwicGFydG5lcklkIjoiIiwiZXhwIjoxNzcwMzExNTA3LCJpYXQiOjE3NzAyMjUxMDcsInRva2VuQ29uc3VtZXJUeXBlIjoiU0VMRiIsIndlYmhvb2tVcmwiOiIiLCJkaGFuQ2xpZW50SWQiOiIxMTA4ODE1NjUxIn0.iZXpo6Z42WqVuMEPczXQSPDEXgP3y699_OK_hLdsugl8_dgnpC_7Akeh-IniThQ29xyd6F4buNYsotqfwFgexQ"
+# SECURITY: load credentials from environment variables (do not hardcode)
+DHAN_CLIENT_ID = os.getenv("DHAN_CLIENT_ID", "")
+DHAN_ACCESS_TOKEN = os.getenv("DHAN_ACCESS_TOKEN", "")
 
 API_BASE_URL = "https://api.dhan.co/v2"
 
@@ -44,6 +46,8 @@ SECURITY_IDS = {
 
 def get_api_headers() -> Dict[str, str]:
     """Return headers for Dhan API requests."""
+    if not DHAN_ACCESS_TOKEN:
+        raise RuntimeError("DHAN_ACCESS_TOKEN is not set. Export DHAN_ACCESS_TOKEN before running.")
     return {
         "Content-Type": "application/json",
         "Accept": "application/json",
@@ -301,4 +305,3 @@ if __name__ == "__main__":
     print("  )")
     print("")
     print("📊 Available symbols:", list(SECURITY_IDS.keys()))
-
