@@ -259,6 +259,57 @@
 	        @media (prefers-reduced-motion: reduce) {
 	            .stat-card, .ctrl-btn, .refresh-btn { transition: none; }
 	        }
+
+        /* ── Modal ── */
+        .modal-overlay {
+            display: none; position: fixed; inset: 0; z-index: 100;
+            background: rgba(0,0,0,0.55); backdrop-filter: blur(6px);
+            -webkit-backdrop-filter: blur(6px);
+            align-items: center; justify-content: center;
+        }
+        .modal-overlay.open { display: flex; }
+        .modal {
+            background: var(--panelSolid);
+            border: 1px solid var(--border);
+            border-radius: var(--radius);
+            padding: 28px 32px 24px;
+            width: 420px; max-width: 92vw;
+            box-shadow: 0 30px 80px rgba(0,0,0,0.55);
+        }
+        .modal h2 { font-size: 17px; font-weight: 700; color: var(--white); margin-bottom: 20px; }
+        .modal-field { margin-bottom: 16px; }
+        .modal-field label {
+            display: block; font-size: 12px; color: var(--muted);
+            text-transform: uppercase; letter-spacing: 0.5px; margin-bottom: 6px;
+        }
+        .modal-field input, .modal-field select {
+            width: 100%; padding: 10px 12px; font-size: 14px;
+            background: rgba(255,255,255,0.05); color: var(--text);
+            border: 1px solid var(--border); border-radius: var(--radiusSm);
+            font-family: inherit;
+        }
+        .modal-field input:focus, .modal-field select:focus {
+            outline: none; border-color: rgba(124,58,237,0.7);
+            box-shadow: 0 0 0 3px rgba(124,58,237,0.15);
+        }
+        .modal-field input[type="date"]::-webkit-calendar-picker-indicator {
+            filter: invert(0.8); cursor: pointer;
+        }
+        .modal-actions { display: flex; gap: 10px; justify-content: flex-end; margin-top: 22px; }
+        .modal-actions button {
+            padding: 10px 20px; border-radius: var(--radiusSm);
+            font-size: 13px; font-weight: 650; cursor: pointer; border: none;
+        }
+        .modal-cancel {
+            background: rgba(255,255,255,0.07); color: var(--muted);
+            border: 1px solid var(--border) !important;
+        }
+        .modal-cancel:hover { background: rgba(255,255,255,0.10); }
+        .modal-confirm {
+            background: linear-gradient(180deg, rgba(16,185,129,1), rgba(5,150,105,1));
+            color: var(--white); box-shadow: 0 8px 20px rgba(16,185,129,0.22);
+        }
+        .modal-confirm:hover { filter: brightness(1.06); }
     </style>
 </head>
 <body>
@@ -318,6 +369,28 @@
             </div>
             <button class="ctrl-btn btn-start" id="btnStartLive" onclick="startLive()">▶ Start</button>
             <button class="ctrl-btn btn-stop" id="btnStopLive" onclick="stopProcess('live')" disabled>■ Stop</button>
+        </div>
+
+        <!-- Backtest Modal -->
+        <div class="modal-overlay" id="btModal">
+            <div class="modal">
+                <h2>Start Backtest</h2>
+                <p style="font-size:13px;color:var(--muted);margin-bottom:18px;">
+                    Runs on all <strong style="color:var(--white)">20 F&amp;O symbols</strong> from config
+                </p>
+                <div class="modal-field">
+                    <label>Start Date</label>
+                    <input type="date" id="btStartDate">
+                </div>
+                <div class="modal-field">
+                    <label>End Date</label>
+                    <input type="date" id="btEndDate">
+                </div>
+                <div class="modal-actions">
+                    <button class="modal-cancel" onclick="closeBTModal()">Cancel</button>
+                    <button class="modal-confirm" onclick="submitBacktest()">▶ Run Backtest</button>
+                </div>
+            </div>
         </div>
 
         <!-- Equity Curve Chart -->
@@ -686,40 +759,47 @@
         btnStopLive.disabled = !d.live_running;
     }
 
-    async function startBacktest() {
-        const symbols = prompt("Symbols (comma-separated):", "RELIANCE,TATASTEEL");
-        if (!symbols) return;
-        const startDate = prompt("Start date (YYYY-MM-DD, blank for 30d ago):", "");
-        const endDate = prompt("End date (YYYY-MM-DD, blank for today):", "");
-        const body = { symbols: symbols.split(",").map(s => s.trim()) };
+    /* ── Backtest modal helpers ── */
+    function startBacktest() {
+        // Pre-fill dates: 30 days ago → today
+        const today = new Date();
+        const ago = new Date(); ago.setDate(today.getDate() - 30);
+        document.getElementById("btEndDate").value = today.toISOString().slice(0,10);
+        document.getElementById("btStartDate").value = ago.toISOString().slice(0,10);
+        document.getElementById("btModal").classList.add("open");
+    }
+    function closeBTModal() { document.getElementById("btModal").classList.remove("open"); }
+    document.getElementById("btModal").addEventListener("click", e => { if (e.target === e.currentTarget) closeBTModal(); });
+    document.addEventListener("keydown", e => { if (e.key === "Escape") closeBTModal(); });
+
+    async function submitBacktest() {
+        const startDate = document.getElementById("btStartDate").value;
+        const endDate = document.getElementById("btEndDate").value;
+        if (startDate && endDate && startDate > endDate) { alert("Start date must be before end date"); return; }
+
+        const body = {};
         if (startDate) body.start_date = startDate;
         if (endDate) body.end_date = endDate;
 
+        closeBTModal();
         const res = await fetch("/api/start_backtest", {
             method: "POST", headers: {"Content-Type": "application/json"},
             body: JSON.stringify(body)
         });
         const d = await res.json();
         if (d.error) alert("Error: " + d.error);
-        else { loadStatus(); }
+        else { loadStatus(); startFastRefresh(); }
     }
 
     async function startLive() {
-        const symbols = prompt("Symbols (comma-separated):", "RELIANCE,TATASTEEL");
-        if (!symbols) return;
-        const capital = prompt("Initial capital:", "500000");
-        const body = {
-            symbols: symbols.split(",").map(s => s.trim()),
-            initial_capital: parseFloat(capital) || 500000
-        };
-
+        if (!confirm("Start live paper trading on all 20 F&O symbols?")) return;
         const res = await fetch("/api/start_live", {
             method: "POST", headers: {"Content-Type": "application/json"},
-            body: JSON.stringify(body)
+            body: JSON.stringify({})
         });
         const d = await res.json();
         if (d.error) alert("Error: " + d.error);
-        else { loadStatus(); }
+        else { loadStatus(); startFastRefresh(); }
     }
 
     async function stopProcess(type) {
@@ -732,6 +812,24 @@
     async function refreshAll() {
         await Promise.all([loadOverview(), loadSessions(), loadStatus()]);
         await Promise.all([loadEquityCurve(), loadPositions(), loadTrades(), loadValidations()]);
+    }
+
+    /* ===== Fast Refresh (after starting a test) ===== */
+    let fastRefreshTimer = null;
+    function startFastRefresh() {
+        // Refresh every 5 seconds for 3 minutes, then stop
+        if (fastRefreshTimer) clearInterval(fastRefreshTimer);
+        let count = 0;
+        fastRefreshTimer = setInterval(async () => {
+            count++;
+            await refreshAll();
+            // After 3 min (36 x 5s) or process stopped, revert to normal refresh
+            const status = await api("/api/status");
+            if (count >= 36 || (!status.backtest_running && !status.live_running)) {
+                clearInterval(fastRefreshTimer);
+                fastRefreshTimer = null;
+            }
+        }, 5000);
     }
 
     /* ===== Init ===== */

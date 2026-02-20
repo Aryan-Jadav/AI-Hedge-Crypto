@@ -14,6 +14,7 @@ import statistics
 from .config import EOS_CONFIG, FNO_STOCKS
 from .data_fetcher import EOSDataFetcher
 from .eos_strategy_engine import SignalType, ExitReason
+from .eos_portfolio_manager import EOSPortfolioManager, TradeRecord, DailySnapshot
 
 
 @dataclass
@@ -36,7 +37,7 @@ class BacktestTrade:
     hold_duration_minutes: float
     price_change_at_entry: float
     oi_change_at_entry: float
-    
+
     def to_dict(self) -> Dict:
         return asdict(self)
 
@@ -61,12 +62,12 @@ class BacktestResult:
     profit_factor: float
     trades: List[BacktestTrade] = field(default_factory=list)
     daily_pnl: Dict[str, float] = field(default_factory=dict)
-    
+
     def to_dict(self) -> Dict:
         result = asdict(self)
         result["trades"] = [t.to_dict() for t in self.trades]
         return result
-    
+
     def to_json(self, filepath: str = None) -> str:
         json_str = json.dumps(self.to_dict(), indent=2, default=str)
         if filepath:
@@ -79,24 +80,24 @@ class EOSBacktester:
     """
     Modular backtester for EOS strategy.
     Can be extended for other strategies by subclassing.
-    
+
     Key Features:
     - Uses expired options historical data from Dhan API
     - Simulates realistic trade execution with slippage
     - Tracks all EOS rules (SL, trailing SL, SMA exit, time exit)
     - Calculates comprehensive performance metrics
     """
-    
+
     def __init__(self, data_fetcher: EOSDataFetcher = None):
         self.data_fetcher = data_fetcher or EOSDataFetcher()
         self.config = EOS_CONFIG
         self.trades: List[BacktestTrade] = []
         self.daily_pnl: Dict[str, float] = {}
-        
+
         # Slippage and commission settings
         self.slippage_pct = 0.1      # 0.1% slippage
         self.commission_per_lot = 40  # ₹40 per lot (approx)
-    
+
     def load_historical_data(self, symbol: str, start_date: str, end_date: str,
                               expiry_code: int = 1) -> Dict:
         """
@@ -685,3 +686,94 @@ class EOSBacktester:
                 pct = count / len(result.trades) * 100
                 print(f"{reason}: {count} ({pct:.1f}%)")
 
+
+    def save_results_to_db(self, result: BacktestResult, initial_capital: float = 100000):
+        """
+        Save backtest results to portfolio database so dashboard can display them.
+
+        Args:
+            result: BacktestResult from run_backtest()
+            initial_capital: Starting capital for the backtest
+        """
+        pm = EOSPortfolioManager()
+
+        # 1. Start backtest session
+        backtest_id = pm.start_backtest(
+            start_date=result.start_date,
+            end_date=result.end_date,
+            symbols=result.symbols_tested,
+            initial_capital=initial_capital,
+            config={"mode": "BACKTEST", **{k: v for k, v in self.config.items() if isinstance(v, (str, int, float, bool))}}
+        )
+        print(f"[DB] Session created: {backtest_id}")
+
+        # 2. Record each trade
+        for i, t in enumerate(result.trades):
+            trade_id = f"{backtest_id}_T{i+1:04d}"
+            trade_record = TradeRecord(
+                trade_id=trade_id,
+                symbol=t.symbol,
+                option_type=t.option_type,
+                strike_price=t.strike_price,
+                entry_date=t.entry_date,
+                entry_time=t.entry_time,
+                entry_price=t.entry_price,
+                exit_date=t.exit_date,
+                exit_time=t.exit_time,
+                exit_price=t.exit_price,
+                quantity=t.quantity,
+                lot_size=t.lot_size,
+                pnl=t.pnl,
+                pnl_pct=t.pnl_pct,
+                exit_reason=t.exit_reason,
+                hold_duration_minutes=t.hold_duration_minutes,
+                price_change_at_entry=t.price_change_at_entry,
+                oi_change_at_entry=t.oi_change_at_entry,
+                backtest_id=backtest_id
+            )
+            pm.record_trade(trade_record)
+        print(f"[DB] {len(result.trades)} trades recorded")
+
+        # 3. Record daily snapshots from daily_pnl
+        cumulative_pnl = 0.0
+        for date in sorted(result.daily_pnl.keys()):
+            day_pnl = result.daily_pnl[date]
+            cumulative_pnl += day_pnl
+
+            # Count trades for this day
+            day_trades = [t for t in result.trades if t.exit_date == date]
+            day_winners = [t for t in day_trades if t.pnl > 0]
+            day_losers = [t for t in day_trades if t.pnl <= 0]
+
+            snapshot = DailySnapshot(
+                date=date,
+                starting_capital=initial_capital + cumulative_pnl - day_pnl,
+                ending_capital=initial_capital + cumulative_pnl,
+                daily_pnl=day_pnl,
+                daily_pnl_pct=(day_pnl / initial_capital * 100) if initial_capital > 0 else 0,
+                trades_taken=len(day_trades),
+                winning_trades=len(day_winners),
+                losing_trades=len(day_losers),
+                max_drawdown=result.max_drawdown,
+                cumulative_pnl=cumulative_pnl,
+                backtest_id=backtest_id
+            )
+            pm.record_daily_snapshot(snapshot)
+        print(f"[DB] {len(result.daily_pnl)} daily snapshots recorded")
+
+        # 4. End backtest with final metrics
+        final_capital = initial_capital + result.total_pnl
+        metrics = {
+            'total_pnl': result.total_pnl,
+            'total_trades': result.total_trades,
+            'win_rate': result.win_rate,
+            'sharpe_ratio': result.sharpe_ratio,
+            'max_drawdown': result.max_drawdown,
+        }
+        pm.end_backtest(
+            backtest_id=backtest_id,
+            final_capital=final_capital,
+            metrics=metrics
+        )
+        print(f"[DB] Session {backtest_id} completed and saved")
+        return backtest_id

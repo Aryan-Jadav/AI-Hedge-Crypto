@@ -294,12 +294,13 @@ def api_start_backtest():
         return jsonify({"error": "Backtest already running"}), 409
 
     data = request.get_json(silent=True) or {}
-    symbols = data.get("symbols", ["RELIANCE", "TATASTEEL"])
+    # Default to ALL FNO symbols from config when none provided
+    from EOS.config import FNO_STOCKS as _fno
+    symbols = data.get("symbols") or list(_fno.keys())
     start_date = data.get("start_date", "")
     end_date = data.get("end_date", "")
 
-    # Build command
-    sym_str = ",".join(symbols) if isinstance(symbols, list) else symbols
+    # Build command – run backtest AND save results to DB
     cmd_parts = [
         sys.executable, "-c",
         f"from EOS.eos_backtester import EOSBacktester; "
@@ -307,7 +308,8 @@ def api_start_backtest():
         f"result = bt.run_backtest(symbols={repr(symbols)}, "
         f"start_date={repr(start_date) if start_date else 'None'}, "
         f"end_date={repr(end_date) if end_date else 'None'}); "
-        f"bt.print_summary(result)"
+        f"bt.print_summary(result); "
+        f"bt.save_results_to_db(result)"
     ]
 
     project_root = str(Path(__file__).parent.parent)
@@ -334,7 +336,9 @@ def api_start_live():
         return jsonify({"error": "Live runner already running"}), 409
 
     data = request.get_json(silent=True) or {}
-    symbols = data.get("symbols", ["RELIANCE", "TATASTEEL"])
+    # Default to ALL FNO symbols from config when none provided
+    from EOS.config import FNO_STOCKS as _fno_live
+    symbols = data.get("symbols") or list(_fno_live.keys())
     capital = data.get("initial_capital", 500000)
 
     cmd_parts = [
