@@ -1,3 +1,4 @@
+# Last updated: 2026-02-21
 """
 EOS Validator Cache - Caching layer for market data
 

@@ -1,3 +1,4 @@
+# Last updated: 2026-02-21
 """
 EOS Risk Manager - Position Sizing & Risk Limits
 

@@ -1,3 +1,4 @@
+# Last updated: 2026-02-21
 """
 EOS WebSocket Data Feed Manager
 Real-time market data via Dhan WebSocket API for the EOS strategy.

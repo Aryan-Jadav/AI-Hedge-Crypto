@@ -1,3 +1,4 @@
+# Last updated: 2026-02-21
 # EOS (Exhaustion of Strength) Trading Strategy Package
 # This package contains the strategy engine, backtester, portfolio manager, and risk manager
 

@@ -1,3 +1,4 @@
+# Last updated: 2026-02-21
 """Quick test for new dashboard features: validation_logs, start/stop, AI reasoning."""
 import sqlite3
 import sys

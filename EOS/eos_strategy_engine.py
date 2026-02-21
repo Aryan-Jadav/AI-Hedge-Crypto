@@ -1,3 +1,4 @@
+# Last updated: 2026-02-21
 """
 EOS (Exhaustion of Strength) Strategy Engine
 Generates trading signals based on EOS strategy rules.

@@ -1,3 +1,4 @@
+# Last updated: 2026-02-21
 """
 EOS Live Runner Launcher
 Standalone script for clean subprocess launch from the dashboard.

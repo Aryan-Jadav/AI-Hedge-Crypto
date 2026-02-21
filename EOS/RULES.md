@@ -1,3 +1,6 @@
+> [!NOTE]
+> Last updated: 2026-02-21
+
 # EOS Strategy - MANDATORY RULES
 
 ## ⚠️ CRITICAL RULES - DO NOT VIOLATE

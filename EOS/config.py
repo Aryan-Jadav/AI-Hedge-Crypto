@@ -1,3 +1,4 @@
+# Last updated: 2026-02-21
 """
 EOS Strategy Configuration
 Contains all strategy parameters, stock universe, and API configuration.

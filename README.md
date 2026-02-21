@@ -1,3 +1,6 @@
+> [!NOTE]
+> Last updated: 2026-02-21
+
 # AI Hedge Fund V3
 
 An AI-powered algorithmic trading system for Indian F&O markets, built with Python and Claude AI integration.

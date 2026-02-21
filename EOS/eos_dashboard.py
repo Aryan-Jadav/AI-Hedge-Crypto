@@ -1,3 +1,4 @@
+# Last updated: 2026-02-21
 """
 EOS + CRYPTO Dashboard - Unified Web Dashboard for AI Hedgefund
 

@@ -1,3 +1,4 @@
+# Last updated: 2026-02-21
 """
 Test script for EOS WebSocket Data Feed.
 Verifies connection, subscription, and data reception.

@@ -1,3 +1,4 @@
+# Last updated: 2026-02-21
 """
 EOS Test Scripts Package
 Contains all test scripts for the EOS trading system.

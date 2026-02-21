@@ -1,3 +1,6 @@
+> [!NOTE]
+> Last updated: 2026-02-21
+
 # EOS (Exhaustion of Strength) Trading Strategy
 
 ## Complete Trading Strategy Documentation

@@ -1,3 +1,4 @@
+# Last updated: 2026-02-21
 """
 Test that all dashboard data-flow changes are working:
   1. API endpoints return valid data

@@ -1,3 +1,4 @@
+# Last updated: 2026-02-21
 """
 EOS Option Chain Manager
 Handles option chain fetching, ATM strike identification, and option price management.

@@ -1,3 +1,6 @@
+> [!NOTE]
+> Last updated: 2026-02-21
+
 # EOS Strategy - Exhaustion of Strength
 
 A contrarian/mean reversion options trading strategy that identifies exhaustion points in price movements.

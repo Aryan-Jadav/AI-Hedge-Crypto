@@ -1,3 +1,4 @@
+# Last updated: 2026-02-21
 """
 EOS Market Context - Data structures and utilities for market context
 

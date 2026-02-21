@@ -1,3 +1,4 @@
+# Last updated: 2026-02-21
 """
 EOS Data Fetcher Module
 Handles all data fetching from Dhan API for the EOS strategy.

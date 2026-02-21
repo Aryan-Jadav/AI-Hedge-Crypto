@@ -1,3 +1,4 @@
+# Last updated: 2026-02-21
 """
 EOS Backtester - Modular Backtesting Framework
 Backtests the EOS strategy using historical data from Dhan API.
