@@ -90,3 +90,6 @@ Thumbs.db
 *.temp
 *.bak
 
+# Exclude CRYPTO module and Claude config
+CRYPTO/
+.claude/

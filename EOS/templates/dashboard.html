@@ -250,15 +250,62 @@
 	            .header { padding: 14px 18px; }
 	            .main { padding: 18px; }
         }
-	        @media (max-width: 520px) {
-	            .header { flex-direction: column; align-items: stretch; gap: 12px; }
-	            .header-right { justify-content: space-between; }
-	            .session-select { min-width: 0; width: 100%; }
-	            .controls-bar { gap: 10px; }
-	        }
-	        @media (prefers-reduced-motion: reduce) {
-	            .stat-card, .ctrl-btn, .refresh-btn { transition: none; }
-	        }
+        @media (max-width: 520px) {
+            .header { flex-direction: column; align-items: stretch; gap: 12px; }
+            .header-right { justify-content: space-between; }
+            .session-select { min-width: 0; width: 100%; }
+            .controls-bar { gap: 10px; }
+        }
+        @media (prefers-reduced-motion: reduce) {
+            .stat-card, .ctrl-btn, .refresh-btn { transition: none; }
+        }
+
+        /* Process Logs Panel */
+        .log-viewer {
+            background: var(--panel); border: 1px solid var(--border2);
+            border-radius: var(--radius); margin-bottom: 24px;
+            box-shadow: var(--shadow); backdrop-filter: blur(10px);
+            -webkit-backdrop-filter: blur(10px); overflow: hidden;
+        }
+        .log-header {
+            display: flex; align-items: center; gap: 10px;
+            padding: 14px 20px; border-bottom: 1px solid var(--border2); cursor: pointer;
+        }
+        .log-header:hover { background: rgba(255,255,255,0.02); }
+        .log-toggle { font-size: 12px; color: var(--muted); transition: transform 0.2s ease; }
+        .log-toggle.open { transform: rotate(90deg); }
+        .log-tabs {
+            display: flex; gap: 4px; padding: 10px 20px 0;
+        }
+        .log-tab {
+            padding: 6px 14px; border-radius: 6px 6px 0 0;
+            font-size: 12px; font-weight: 600; cursor: pointer;
+            background: rgba(255,255,255,0.04); color: var(--muted);
+            border: 1px solid transparent; border-bottom: none;
+        }
+        .log-tab.active { background: rgba(124,58,237,0.12); color: var(--accent); border-color: var(--border); }
+        .log-tab:hover:not(.active) { background: rgba(255,255,255,0.06); }
+        .log-body {
+            display: none; padding: 0 20px 16px;
+        }
+        .log-body.open { display: block; }
+        .log-output {
+            background: #0a0a12; border: 1px solid rgba(255,255,255,0.06);
+            border-radius: 8px; padding: 14px; font-family: 'Consolas', 'Monaco', monospace;
+            font-size: 12px; line-height: 1.6; color: #b0b8c5;
+            max-height: 320px; overflow-y: auto; white-space: pre-wrap; word-break: break-all;
+        }
+        .log-output::-webkit-scrollbar { width: 4px; }
+        .log-output::-webkit-scrollbar-thumb { background: rgba(255,255,255,0.14); border-radius: 4px; }
+        .log-actions {
+            display: flex; gap: 8px; margin-top: 8px; justify-content: flex-end;
+        }
+        .log-actions button {
+            padding: 5px 12px; font-size: 11px; font-weight: 600;
+            border-radius: 6px; border: 1px solid rgba(255,255,255,0.08);
+            background: rgba(255,255,255,0.05); color: var(--muted); cursor: pointer;
+        }
+        .log-actions button:hover { background: rgba(255,255,255,0.08); }
 
         /* ── Modal ── */
         .modal-overlay {
@@ -371,6 +418,27 @@
             <button class="ctrl-btn btn-stop" id="btnStopLive" onclick="stopProcess('live')" disabled>■ Stop</button>
         </div>
 
+        <!-- Process Logs Viewer -->
+        <div class="log-viewer">
+            <div class="log-header" onclick="toggleLogs()">
+                <span class="log-toggle" id="logToggle">▶</span>
+                <span class="ctrl-label">Process Logs</span>
+                <span style="font-size:12px;color:var(--muted2);margin-left:auto;" id="logStatusHint">click to expand</span>
+            </div>
+            <div class="log-body" id="logBody">
+                <div class="log-tabs">
+                    <div class="log-tab active" data-log="backtest" onclick="switchLogTab('backtest',this)">Backtest</div>
+                    <div class="log-tab" data-log="live" onclick="switchLogTab('live',this)">Live Runner</div>
+                    <div class="log-tab" data-log="crypto_live" onclick="switchLogTab('crypto_live',this)">Crypto</div>
+                </div>
+                <div class="log-output" id="logOutput">No log output yet. Start a process to see output here.</div>
+                <div class="log-actions">
+                    <button onclick="refreshLogPanel()">↻ Refresh</button>
+                    <button onclick="clearCurrentLog()">✕ Clear</button>
+                </div>
+            </div>
+        </div>
+
         <!-- Backtest Modal -->
         <div class="modal-overlay" id="btModal">
             <div class="modal">
@@ -451,6 +519,128 @@
             </table>
         </div>
     </div>
+
+    <!-- ============================================================ -->
+    <!-- CRYPTO MODULE SECTION                                        -->
+    <!-- ============================================================ -->
+    <div class="main" style="padding-top:0;">
+        <!-- Divider -->
+        <div style="border-top:1px solid rgba(255,255,255,0.07);padding-top:28px;margin-top:4px;">
+
+            <!-- Crypto Header -->
+            <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:20px;">
+                <div>
+                    <h2 style="font-size:16px;font-weight:750;color:#fff;margin-bottom:4px;">
+                        <span style="color:var(--amber);">CRYPTO</span> Perpetuals &mdash; Bybit USDT Perps
+                    </h2>
+                    <p style="font-size:12px;color:var(--muted2);">
+                        CRYPTO-EOS Contrarian Strategy &bull; Asia Session 05:30–14:00 IST &bull;
+                        BTC / ETH / SOL / BNB / XRP
+                    </p>
+                </div>
+                <select class="session-select" id="cryptoSessionSelect" onchange="cryptoLoadSession()" style="min-width:220px;">
+                    <option value="">All Crypto Sessions</option>
+                </select>
+            </div>
+
+            <!-- Crypto Stats Row -->
+            <div class="stats-row" id="cryptoStatsRow" style="margin-bottom:20px;">
+                <div class="stat-card" style="--accent:var(--amber);">
+                    <div class="stat-label">Total PnL (USDT)</div>
+                    <div class="stat-value" id="cryptoTotalPnl" style="font-size:24px;">$0.00</div>
+                    <div class="stat-sub" id="cryptoTotalPnlSub"></div>
+                </div>
+                <div class="stat-card">
+                    <div class="stat-label">Win Rate</div>
+                    <div class="stat-value" id="cryptoWinRate" style="font-size:24px;">0%</div>
+                    <div class="stat-sub" id="cryptoTotalTrades">0 trades</div>
+                </div>
+                <div class="stat-card">
+                    <div class="stat-label">Capital (USDT)</div>
+                    <div class="stat-value" id="cryptoCapital" style="font-size:24px;">$10,000</div>
+                    <div class="stat-sub" id="cryptoCapitalSub"></div>
+                </div>
+                <div class="stat-card">
+                    <div class="stat-label">Sessions</div>
+                    <div class="stat-value" id="cryptoSessionCount" style="font-size:24px;">0</div>
+                    <div class="stat-sub" id="cryptoSessionMode">Paper / Live</div>
+                </div>
+            </div>
+
+            <!-- Crypto Controls -->
+            <div class="controls-bar" style="margin-bottom:24px;">
+                <span class="ctrl-label">CRYPTO RUNNER</span>
+                <div class="ctrl-group">
+                    <span class="status-dot stopped" id="cryptoDot"></span>
+                    <span style="font-size:13px;color:var(--muted2);" id="cryptoStatusText">Stopped</span>
+                </div>
+                <div class="ctrl-divider"></div>
+                <button class="ctrl-btn btn-start" id="cryptoStartBtn" onclick="cryptoStartLive()">▶ Start Live</button>
+                <button class="ctrl-btn btn-stop" id="cryptoStopBtn" onclick="cryptoStopLive()" disabled>■ Stop</button>
+                <div class="ctrl-divider"></div>
+                <span style="font-size:12px;color:var(--muted2);" id="cryptoModeLabel">Paper Trade Mode</span>
+            </div>
+
+            <!-- Crypto Equity Curve -->
+            <div class="chart-section" style="margin-bottom:24px;">
+                <div class="section-title">
+                    Equity Curve (USDT)
+                    <span style="font-size:12px;color:var(--muted2);">Crypto Sessions</span>
+                </div>
+                <div class="chart-container">
+                    <canvas id="cryptoEquityChart"></canvas>
+                </div>
+            </div>
+
+            <!-- Crypto Positions + Trades -->
+            <div class="two-col" style="margin-bottom:24px;">
+                <div class="panel">
+                    <div class="section-title">Open Positions</div>
+                    <div id="cryptoPositions"><div class="empty-state">No open crypto positions</div></div>
+                </div>
+                <div class="panel">
+                    <div class="section-title">Recent Trades</div>
+                    <div id="cryptoTrades"><div class="empty-state">No crypto trades yet</div></div>
+                </div>
+            </div>
+
+            <!-- Crypto AI Validation Log -->
+            <div class="chart-section" style="margin-bottom:24px;">
+                <div class="section-title">
+                    AI Validation Log
+                    <span style="font-size:12px;color:var(--muted2);" id="cryptoValCount">0 entries</span>
+                </div>
+                <div id="cryptoValidations"><div class="empty-state">No crypto validation logs</div></div>
+            </div>
+
+            <!-- Crypto Sessions Table -->
+            <div class="sessions-section">
+                <div class="section-title" style="font-size:15px;font-weight:650;color:var(--white);margin-bottom:14px;">Crypto Trading Sessions</div>
+                <div style="overflow-x:auto;">
+                    <table>
+                        <thead>
+                            <tr>
+                                <th>Session ID</th>
+                                <th>Date</th>
+                                <th>Mode</th>
+                                <th>Trades</th>
+                                <th>Win Rate</th>
+                                <th>PnL (USDT)</th>
+                                <th>Capital (USDT)</th>
+                            </tr>
+                        </thead>
+                        <tbody id="cryptoSessionsTable">
+                            <tr><td colspan="7" style="text-align:center;color:var(--muted2);padding:16px;">No crypto sessions yet</td></tr>
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+
+        </div>
+    </div>
+    <!-- ============================================================ -->
+    <!-- END CRYPTO SECTION                                           -->
+    <!-- ============================================================ -->
 
 <script>
     /* ===== State ===== */
@@ -812,6 +1002,9 @@
     async function refreshAll() {
         await Promise.all([loadOverview(), loadSessions(), loadStatus()]);
         await Promise.all([loadEquityCurve(), loadPositions(), loadTrades(), loadValidations()]);
+        // Also refresh crypto section
+        await Promise.all([cryptoLoadOverview(), cryptoLoadSessions(), cryptoUpdateStatus()]);
+        await Promise.all([cryptoLoadEquityCurve(), cryptoLoadPositions(), cryptoLoadTrades(), cryptoLoadValidations()]);
     }
 
     /* ===== Fast Refresh (after starting a test) ===== */
@@ -823,13 +1016,326 @@
         fastRefreshTimer = setInterval(async () => {
             count++;
             await refreshAll();
+            // Also refresh logs
+            await refreshLogPanel();
             // After 3 min (36 x 5s) or process stopped, revert to normal refresh
             const status = await api("/api/status");
-            if (count >= 36 || (!status.backtest_running && !status.live_running)) {
+            const cStatus = await api("/api/crypto/status");
+            if (count >= 36 || (!status.backtest_running && !status.live_running && !cStatus.crypto_live_running)) {
                 clearInterval(fastRefreshTimer);
                 fastRefreshTimer = null;
             }
         }, 5000);
+    }
+
+    /* ===== Process Logs ===== */
+    let activeLogTab = "backtest";
+    let logsExpanded = false;
+
+    function toggleLogs() {
+        logsExpanded = !logsExpanded;
+        document.getElementById("logBody").classList.toggle("open", logsExpanded);
+        document.getElementById("logToggle").classList.toggle("open", logsExpanded);
+        document.getElementById("logStatusHint").textContent = logsExpanded ? "" : "click to expand";
+        if (logsExpanded) refreshLogPanel();
+    }
+
+    function switchLogTab(logType, el) {
+        activeLogTab = logType;
+        document.querySelectorAll(".log-tab").forEach(t => t.classList.remove("active"));
+        el.classList.add("active");
+        refreshLogPanel();
+    }
+
+    async function refreshLogPanel() {
+        if (!logsExpanded) return;
+        try {
+            const d = await api(`/api/logs/${activeLogTab}?lines=100`);
+            const el = document.getElementById("logOutput");
+            if (d.log && d.log.trim()) {
+                el.textContent = d.log;
+                // Auto-scroll to bottom
+                el.scrollTop = el.scrollHeight;
+            } else {
+                el.textContent = `No ${activeLogTab} log output yet. Start a process to see output here.`;
+            }
+        } catch(e) {
+            console.error("Log refresh error:", e);
+        }
+    }
+
+    async function clearCurrentLog() {
+        try {
+            await fetch(`/api/logs/${activeLogTab}/clear`, {method: "POST"});
+            document.getElementById("logOutput").textContent = "Log cleared.";
+        } catch(e) {}
+    }
+
+    /* ============================================================== */
+    /* ===== CRYPTO SECTION JAVASCRIPT ============================= */
+    /* ============================================================== */
+
+    let cryptoEquityChart = null;
+    let activeCryptoSession = "";
+
+    function fmtUsdt(n) {
+        const v = Number(n) || 0;
+        return "$" + v.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+    }
+
+    async function cryptoLoadOverview() {
+        try {
+            const d = await api("/api/crypto/overview");
+            const pnl = d.total_pnl_usdt || 0;
+            const pnlEl = document.getElementById("cryptoTotalPnl");
+            pnlEl.textContent = (pnl >= 0 ? "+" : "") + fmtUsdt(pnl);
+            pnlEl.className = "stat-value " + pnlClass(pnl);
+            const cap = d.current_capital_usdt || d.initial_capital_usdt || 10000;
+            const initCap = d.initial_capital_usdt || 10000;
+            const capChange = cap - initCap;
+            const capChangePct = initCap > 0 ? (capChange / initCap * 100) : 0;
+            document.getElementById("cryptoCapital").textContent = fmtUsdt(cap);
+            document.getElementById("cryptoCapitalSub").textContent =
+                (capChange >= 0 ? "+" : "") + fmtUsdt(capChange) + " (" + (capChange >= 0 ? "+" : "") + capChangePct.toFixed(2) + "%)";
+            document.getElementById("cryptoCapitalSub").className = "stat-sub " + pnlClass(capChange);
+            document.getElementById("cryptoWinRate").textContent = (d.win_rate || 0).toFixed(1) + "%";
+            document.getElementById("cryptoTotalTrades").textContent = (d.total_trades || 0) + " trades";
+            document.getElementById("cryptoSessionCount").textContent = d.total_sessions || 0;
+        } catch(e) { console.error("Crypto overview error:", e); }
+    }
+
+    async function cryptoLoadSessions() {
+        try {
+            const sessions = await api("/api/crypto/sessions");
+            const sel = document.getElementById("cryptoSessionSelect");
+            // Preserve current selection
+            const cur = sel.value;
+            while (sel.options.length > 1) sel.remove(1);
+            sessions.forEach(s => {
+                const opt = document.createElement("option");
+                opt.value = s.session_id;
+                opt.textContent = s.session_id + " [" + (s.mode || "PAPER") + "]";
+                sel.appendChild(opt);
+            });
+            if (cur) sel.value = cur;
+
+            // Populate sessions table
+            const tbody = document.getElementById("cryptoSessionsTable");
+            if (!sessions.length) {
+                tbody.innerHTML = '<tr><td colspan="7" style="text-align:center;color:var(--muted2);padding:16px;">No crypto sessions yet</td></tr>';
+                return;
+            }
+            tbody.innerHTML = sessions.map(s => {
+                const pnl = s.total_pnl_usdt || 0;
+                const finalCap = s.final_capital_usdt || s.initial_capital_usdt || 10000;
+                const modeBadge = s.mode === "LIVE"
+                    ? '<span class="badge badge-live">LIVE</span>'
+                    : '<span class="badge badge-tier">PAPER</span>';
+                return `<tr class="clickable" onclick="cryptoSelectSession('${s.session_id}')">
+                    <td style="font-size:12px;color:var(--muted);">${s.session_id}</td>
+                    <td>${s.start_date || ''}</td>
+                    <td>${modeBadge}</td>
+                    <td>${s.total_trades || 0}</td>
+                    <td>${s.win_rate != null ? s.win_rate.toFixed(1) + "%" : "--"}</td>
+                    <td class="${pnlClass(pnl)}">${pnl >= 0 ? "+" : ""}${fmtUsdt(pnl)}</td>
+                    <td>${fmtUsdt(finalCap)}</td>
+                </tr>`;
+            }).join("");
+        } catch(e) { console.error("Crypto sessions error:", e); }
+    }
+
+    function cryptoSelectSession(sid) {
+        document.getElementById("cryptoSessionSelect").value = sid;
+        activeCryptoSession = sid;
+        cryptoLoadEquityCurve();
+        cryptoLoadPositions();
+        cryptoLoadTrades();
+        cryptoLoadValidations();
+    }
+
+    function cryptoLoadSession() {
+        activeCryptoSession = document.getElementById("cryptoSessionSelect").value;
+        cryptoLoadEquityCurve();
+        cryptoLoadPositions();
+        cryptoLoadTrades();
+        cryptoLoadValidations();
+    }
+
+    async function cryptoLoadEquityCurve() {
+        try {
+            const url = activeCryptoSession
+                ? "/api/crypto/equity_curve?session_id=" + activeCryptoSession
+                : "/api/crypto/equity_curve";
+            const data = await api(url);
+            const labels = data.map(d => d.date);
+            const values = data.map(d => d.ending_capital_usdt || 0);
+            if (cryptoEquityChart) cryptoEquityChart.destroy();
+            const ctx = document.getElementById("cryptoEquityChart").getContext("2d");
+            cryptoEquityChart = new Chart(ctx, {
+                type: "line",
+                data: {
+                    labels,
+                    datasets: [{
+                        label: "USDT Capital",
+                        data: values,
+                        borderColor: "#f59e0b",
+                        backgroundColor: "rgba(245,158,11,0.07)",
+                        borderWidth: 2, fill: true, tension: 0.3,
+                        pointRadius: 3, pointBackgroundColor: "#f59e0b"
+                    }]
+                },
+                options: {
+                    responsive: true, maintainAspectRatio: false,
+                    plugins: { legend: { display: false } },
+                    scales: {
+                        x: { grid: { color: "rgba(255,255,255,0.04)" }, ticks: { color: "#6b7280", font: { size: 11 } } },
+                        y: { grid: { color: "rgba(255,255,255,0.04)" }, ticks: { color: "#6b7280", font: { size: 11 }, callback: v => "$" + Number(v).toLocaleString() } }
+                    }
+                }
+            });
+        } catch(e) { console.error("Crypto equity curve error:", e); }
+    }
+
+    async function cryptoLoadPositions() {
+        try {
+            const url = activeCryptoSession
+                ? "/api/crypto/positions?session_id=" + activeCryptoSession
+                : "/api/crypto/positions";
+            const positions = await api(url);
+            const el = document.getElementById("cryptoPositions");
+            if (!positions.length) {
+                el.innerHTML = '<div class="empty-state">No open crypto positions</div>';
+                return;
+            }
+            el.innerHTML = positions.map(p => {
+                const pnl = p.unrealized_pnl_usdt || 0;
+                const sideBadge = p.side === "LONG" ? "badge-call" : "badge-put";
+                return `<div class="position-item">
+                    <div class="item-left">
+                        <div class="item-symbol">${p.symbol} <span class="badge ${sideBadge}">${p.side}</span></div>
+                        <div class="item-meta">Entry: ${fmtUsdt(p.entry_price)} | Qty: ${p.quantity}</div>
+                        <div class="item-meta">SL: ${fmtUsdt(p.stop_loss || 0)}</div>
+                    </div>
+                    <div>
+                        <div class="item-pnl ${pnlClass(pnl)}">${pnl >= 0 ? "+" : ""}${fmtUsdt(pnl)}</div>
+                    </div>
+                </div>`;
+            }).join("");
+        } catch(e) { console.error("Crypto positions error:", e); }
+    }
+
+    async function cryptoLoadTrades() {
+        try {
+            const url = activeCryptoSession
+                ? "/api/crypto/trades?session_id=" + activeCryptoSession
+                : "/api/crypto/trades";
+            const trades = await api(url);
+            const el = document.getElementById("cryptoTrades");
+            if (!trades.length) {
+                el.innerHTML = '<div class="empty-state">No crypto trades yet</div>';
+                return;
+            }
+            el.innerHTML = trades.slice(0, 20).map(t => {
+                const pnl = t.pnl_usdt || 0;
+                const pnlPct = t.pnl_pct || 0;
+                const sideBadge = t.side === "LONG" ? "badge-call" : "badge-put";
+                return `<div class="trade-item">
+                    <div class="item-left">
+                        <div class="item-symbol">${t.symbol} <span class="badge ${sideBadge}">${t.side}</span></div>
+                        <div class="item-meta">${t.entry_date} ${t.entry_time || ''} → ${t.exit_time || ''}</div>
+                        <div class="item-meta">${t.exit_reason || ''}</div>
+                    </div>
+                    <div>
+                        <div class="item-pnl ${pnlClass(pnl)}">${pnl >= 0 ? "+" : ""}${fmtUsdt(pnl)}</div>
+                        <div class="item-pnl-pct ${pnlClass(pnlPct)}">${pnlPct >= 0 ? "+" : ""}${pnlPct.toFixed(2)}%</div>
+                    </div>
+                </div>`;
+            }).join("");
+        } catch(e) { console.error("Crypto trades error:", e); }
+    }
+
+    async function cryptoLoadValidations() {
+        try {
+            const url = activeCryptoSession
+                ? "/api/crypto/validations?session_id=" + activeCryptoSession
+                : "/api/crypto/validations";
+            const logs = await api(url);
+            document.getElementById("cryptoValCount").textContent = logs.length + " entries";
+            const el = document.getElementById("cryptoValidations");
+            if (!logs.length) {
+                el.innerHTML = '<div class="empty-state">No crypto validation logs</div>';
+                return;
+            }
+            el.innerHTML = logs.slice(0, 15).map(v => {
+                const resultBadge = v.result === "APPROVE" ? "badge-approve" : "badge-reject";
+                const sideBadge = v.signal_type === "LONG" ? "badge-call" : "badge-put";
+                const ts = v.timestamp ? new Date(v.timestamp).toLocaleString() : "";
+                const priceFmt = v.price_change_pct != null ? `${v.price_change_pct >= 0 ? "+" : ""}${Number(v.price_change_pct).toFixed(2)}%` : "";
+                const fundingFmt = v.funding_rate != null ? `${(v.funding_rate * 100).toFixed(4)}%` : "";
+                return `<div class="validation-item">
+                    <div class="val-header">
+                        <div>
+                            <span class="item-symbol">${v.symbol}</span>
+                            <span class="badge ${sideBadge}">${v.signal_type || '--'}</span>
+                            <span class="badge ${resultBadge}">${v.result}</span>
+                            <span class="badge badge-tier">${v.tier_used || ''}</span>
+                        </div>
+                        <span style="font-size:11px;color:var(--muted2);">${ts}</span>
+                    </div>
+                    <div class="val-reason">${v.reason || 'No reason'}</div>
+                    <div class="val-meta">
+                        ${v.confidence != null ? 'Conf: ' + (v.confidence * 100).toFixed(0) + '%' : ''}
+                        ${v.entry_price ? ' | Entry: ' + fmtUsdt(v.entry_price) : ''}
+                        ${priceFmt ? ' | Price Δ: ' + priceFmt : ''}
+                        ${fundingFmt ? ' | Funding: ' + fundingFmt : ''}
+                        ${v.latency_ms ? ' | ' + v.latency_ms + 'ms' : ''}
+                    </div>
+                </div>`;
+            }).join("");
+        } catch(e) { console.error("Crypto validations error:", e); }
+    }
+
+    async function cryptoUpdateStatus() {
+        try {
+            const d = await api("/api/crypto/status");
+            const running = d.crypto_live_running;
+            const dot = document.getElementById("cryptoDot");
+            const txt = document.getElementById("cryptoStatusText");
+            const startBtn = document.getElementById("cryptoStartBtn");
+            const stopBtn = document.getElementById("cryptoStopBtn");
+            dot.className = "status-dot " + (running ? "running" : "stopped");
+            txt.textContent = running ? "Running" : "Stopped";
+            txt.style.color = running ? "#10b981" : "#6b7280";
+            startBtn.disabled = running;
+            stopBtn.disabled = !running;
+            if (running) {
+                document.getElementById("cryptoModeLabel").textContent = "LIVE Active";
+            } else {
+                document.getElementById("cryptoModeLabel").textContent = "Paper Trade Mode";
+            }
+        } catch(e) {}
+    }
+
+    async function cryptoStartLive() {
+        if (!confirm("Start CRYPTO live runner (paper trade mode) on all 5 pairs?")) return;
+        try {
+            const res = await fetch("/api/crypto/start_live", {
+                method: "POST",
+                headers: {"Content-Type": "application/json"},
+                body: JSON.stringify({paper_trade: true})
+            });
+            const d = await res.json();
+            if (d.error) alert("Error: " + d.error);
+            else { cryptoUpdateStatus(); startFastRefresh(); }
+        } catch(e) { alert("Error: " + e); }
+    }
+
+    async function cryptoStopLive() {
+        if (!confirm("Stop the CRYPTO live runner?")) return;
+        try {
+            await fetch("/api/crypto/stop_live", {method: "POST"});
+            setTimeout(cryptoUpdateStatus, 600);
+        } catch(e) {}
     }
 
     /* ===== Init ===== */

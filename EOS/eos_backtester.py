@@ -148,6 +148,24 @@ class EOSBacktester:
             to_date=end_date
         )
 
+        # Log data fetch results for debugging
+        import sys
+        sys.stdout.flush()
+        for label, resp in [("CALL", call_data), ("PUT", put_data)]:
+            status = resp.get("status", "unknown")
+            if status != "success":
+                print(f"  [WARN] {symbol} {label} data fetch: status={status}")
+                if "remarks" in resp:
+                    print(f"         remarks: {resp['remarks']}")
+                if "errors" in resp:
+                    print(f"         errors: {resp['errors']}")
+                if "errorCode" in resp:
+                    print(f"         errorCode: {resp['errorCode']}")
+            else:
+                data_keys = list(resp.get("data", {}).keys()) if isinstance(resp.get("data"), dict) else []
+                print(f"  [OK]   {symbol} {label} data fetch: status=success, keys={data_keys}")
+        sys.stdout.flush()
+
         return {
             "status": "success",
             "symbol": symbol,
@@ -350,6 +368,20 @@ class EOSBacktester:
 
         if not call_candles and not put_candles:
             print(f"No option candle data for {symbol}")
+            # Print diagnostic details
+            call_resp = data.get("call_data", {})
+            put_resp = data.get("put_data", {})
+            print(f"  CALL response status: {call_resp.get('status', 'N/A')}")
+            print(f"  PUT  response status: {put_resp.get('status', 'N/A')}")
+            if isinstance(call_resp.get('data'), dict):
+                ce_data = call_resp['data'].get('ce', {})
+                print(f"  CALL data keys: {list(call_resp['data'].keys())}")
+                print(f"  CALL ce timestamps: {len(ce_data.get('timestamp', []))} entries")
+            if isinstance(put_resp.get('data'), dict):
+                pe_data = put_resp['data'].get('pe', {})
+                print(f"  PUT  data keys: {list(put_resp['data'].keys())}")
+                print(f"  PUT  pe timestamps: {len(pe_data.get('timestamp', []))} entries")
+            import sys; sys.stdout.flush()
             return []
 
         print(f"Loaded {len(call_candles)} CALL candles, {len(put_candles)} PUT candles")

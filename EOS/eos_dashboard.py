@@ -1,9 +1,9 @@
 """
-EOS Dashboard - Minimal Web Dashboard for EOS Trading System
+EOS + CRYPTO Dashboard - Unified Web Dashboard for AI Hedgefund
 
-Tracks both backtest and live trading sessions.
+Tracks EOS (Indian F&O) and CRYPTO (Bybit Perps) sessions.
 Dark-themed, modern UI with equity curve, positions, trade history,
-AI reasoning logs, and start/stop controls for backtest & live.
+AI reasoning logs, and start/stop controls for all runners.
 
 Usage:
     python -m EOS.eos_dashboard
@@ -25,13 +25,50 @@ app = Flask(__name__, template_folder=str(Path(__file__).parent / "templates"))
 
 DB_PATH = str(Path(__file__).parent / "portfolio.db")
 EOS_DIR = str(Path(__file__).parent)
+PROJECT_ROOT = str(Path(__file__).parent.parent)
+
+# Log directory for subprocess output
+LOG_DIR = str(Path(__file__).parent / "logs")
+os.makedirs(LOG_DIR, exist_ok=True)
 
 # Process tracking for start/stop controls
 _running_processes = {
-    "backtest": None,   # subprocess.Popen object
-    "live": None,       # subprocess.Popen object
+    "backtest":    None,   # subprocess.Popen object
+    "live":        None,   # subprocess.Popen object
+    "crypto_live": None,   # CRYPTO live runner subprocess
 }
 _process_lock = threading.Lock()
+
+# Log file paths
+_log_files = {
+    "backtest":    os.path.join(LOG_DIR, "backtest.log"),
+    "live":        os.path.join(LOG_DIR, "live.log"),
+    "crypto_live": os.path.join(LOG_DIR, "crypto_live.log"),
+}
+
+
+def _get_log_path(process_type: str) -> str:
+    """Get log file path for a process type."""
+    return _log_files.get(process_type, os.path.join(LOG_DIR, f"{process_type}.log"))
+
+
+def _open_log_file(process_type: str):
+    """Open (or create) a log file for subprocess output."""
+    path = _get_log_path(process_type)
+    return open(path, "w", buffering=1, encoding="utf-8")
+
+
+def _read_log_tail(process_type: str, lines: int = 100) -> str:
+    """Read the last N lines from a process log file."""
+    path = _get_log_path(process_type)
+    if not os.path.exists(path):
+        return ""
+    try:
+        with open(path, "r", encoding="utf-8", errors="replace") as f:
+            all_lines = f.readlines()
+        return "".join(all_lines[-lines:])
+    except Exception:
+        return ""
 
 
 def get_db():
@@ -39,6 +76,16 @@ def get_db():
     conn = sqlite3.connect(DB_PATH)
     conn.row_factory = sqlite3.Row
     return conn
+
+
+def _eos_table_exists(conn, table_name: str) -> bool:
+    """Check if an EOS table exists in the database."""
+    cursor = conn.cursor()
+    cursor.execute(
+        "SELECT name FROM sqlite_master WHERE type='table' AND name=?",
+        (table_name,)
+    )
+    return cursor.fetchone() is not None
 
 
 # ===== PAGE ROUTES =====
@@ -55,6 +102,14 @@ def dashboard():
 def api_overview():
     """Overall portfolio statistics across all sessions."""
     conn = get_db()
+
+    if not _eos_table_exists(conn, "backtests"):
+        conn.close()
+        return jsonify({
+            "total_sessions": 0, "total_trades": 0, "total_pnl": 0.0,
+            "win_rate": 0.0, "current_capital": 500000.0, "initial_capital": 500000.0
+        })
+
     cursor = conn.cursor()
 
     # Total sessions
@@ -62,21 +117,23 @@ def api_overview():
     total_sessions = cursor.fetchone()["count"]
 
     # Total trades
-    cursor.execute("SELECT COUNT(*) as count FROM trades")
-    total_trades = cursor.fetchone()["count"]
+    trades_exist = _eos_table_exists(conn, "trades")
+    total_trades = 0
+    win_rate = 0.0
+    if trades_exist:
+        cursor.execute("SELECT COUNT(*) as count FROM trades")
+        total_trades = cursor.fetchone()["count"]
+        cursor.execute("""
+            SELECT COUNT(*) as total,
+                   SUM(CASE WHEN pnl > 0 THEN 1 ELSE 0 END) as wins
+            FROM trades
+        """)
+        row = cursor.fetchone()
+        win_rate = (row["wins"] / row["total"] * 100) if row["total"] > 0 else 0
 
     # Aggregate P&L
     cursor.execute("SELECT COALESCE(SUM(total_pnl), 0) as total_pnl FROM backtests WHERE total_pnl IS NOT NULL")
     total_pnl = cursor.fetchone()["total_pnl"]
-
-    # Win rate across all trades
-    cursor.execute("""
-        SELECT COUNT(*) as total,
-               SUM(CASE WHEN pnl > 0 THEN 1 ELSE 0 END) as wins
-        FROM trades
-    """)
-    row = cursor.fetchone()
-    win_rate = (row["wins"] / row["total"] * 100) if row["total"] > 0 else 0
 
     # Latest session capital
     cursor.execute("SELECT initial_capital, final_capital FROM backtests ORDER BY created_at DESC LIMIT 1")
@@ -99,6 +156,9 @@ def api_overview():
 def api_sessions():
     """List all trading sessions (backtests + live)."""
     conn = get_db()
+    if not _eos_table_exists(conn, "backtests"):
+        conn.close()
+        return jsonify([])
     cursor = conn.cursor()
     cursor.execute("""
         SELECT backtest_id, start_date, end_date, symbols, initial_capital,
@@ -128,6 +188,9 @@ def api_sessions():
 def api_session_detail(session_id):
     """Get detailed info for a specific session."""
     conn = get_db()
+    if not _eos_table_exists(conn, "backtests"):
+        conn.close()
+        return jsonify({"error": "Session not found"}), 404
     cursor = conn.cursor()
 
     cursor.execute("SELECT * FROM backtests WHERE backtest_id = ?", (session_id,))
@@ -159,6 +222,9 @@ def api_trades():
     """Get trades, optionally filtered by session_id."""
     session_id = request.args.get("session_id")
     conn = get_db()
+    if not _eos_table_exists(conn, "trades"):
+        conn.close()
+        return jsonify([])
     cursor = conn.cursor()
 
     if session_id:
@@ -179,6 +245,9 @@ def api_snapshots():
     """Get daily snapshots, optionally filtered by session_id."""
     session_id = request.args.get("session_id")
     conn = get_db()
+    if not _eos_table_exists(conn, "daily_snapshots"):
+        conn.close()
+        return jsonify([])
     cursor = conn.cursor()
 
     if session_id:
@@ -196,6 +265,9 @@ def api_equity_curve():
     """Get equity curve data for charting."""
     session_id = request.args.get("session_id")
     conn = get_db()
+    if not _eos_table_exists(conn, "daily_snapshots"):
+        conn.close()
+        return jsonify([])
     cursor = conn.cursor()
 
     if session_id:
@@ -221,6 +293,9 @@ def api_positions():
     """Get open positions."""
     session_id = request.args.get("session_id")
     conn = get_db()
+    if not _eos_table_exists(conn, "positions"):
+        conn.close()
+        return jsonify([])
     cursor = conn.cursor()
 
     query = "SELECT * FROM positions WHERE status = 'OPEN'"
@@ -312,13 +387,13 @@ def api_start_backtest():
         f"bt.save_results_to_db(result)"
     ]
 
-    project_root = str(Path(__file__).parent.parent)
     try:
+        log_fh = _open_log_file("backtest")
         with _process_lock:
             proc = subprocess.Popen(
                 cmd_parts,
-                cwd=project_root,
-                stdout=subprocess.PIPE,
+                cwd=PROJECT_ROOT,
+                stdout=log_fh,
                 stderr=subprocess.STDOUT,
                 creationflags=subprocess.CREATE_NEW_PROCESS_GROUP if os.name == 'nt' else 0
             )
@@ -341,25 +416,21 @@ def api_start_live():
     symbols = data.get("symbols") or list(_fno_live.keys())
     capital = data.get("initial_capital", 500000)
 
+    # Use standalone launcher script instead of fragile python -c
     cmd_parts = [
-        sys.executable, "-c",
-        f"from EOS.eos_live_runner import EOSLiveRunner; "
-        f"runner = EOSLiveRunner(symbols={repr(symbols)}, "
-        f"initial_capital={capital}, paper_trade=True); "
-        f"runner.start(); "
-        f"import time;\n"
-        f"try:\n"
-        f"    while runner.is_running: time.sleep(1)\n"
-        f"except KeyboardInterrupt: runner.stop()"
+        sys.executable, "-m", "EOS.run_live",
+        "--symbols", *symbols,
+        "--capital", str(capital),
+        "--paper",
     ]
 
-    project_root = str(Path(__file__).parent.parent)
     try:
+        log_fh = _open_log_file("live")
         with _process_lock:
             proc = subprocess.Popen(
                 cmd_parts,
-                cwd=project_root,
-                stdout=subprocess.PIPE,
+                cwd=PROJECT_ROOT,
+                stdout=log_fh,
                 stderr=subprocess.STDOUT,
                 creationflags=subprocess.CREATE_NEW_PROCESS_GROUP if os.name == 'nt' else 0
             )
@@ -373,7 +444,7 @@ def api_start_live():
 @app.route("/api/stop/<process_type>", methods=["POST"])
 def api_stop(process_type):
     """Stop a running backtest or live process."""
-    if process_type not in ("backtest", "live"):
+    if process_type not in ("backtest", "live", "crypto_live"):
         return jsonify({"error": "Invalid process type"}), 400
 
     with _process_lock:
@@ -396,13 +467,361 @@ def api_stop(process_type):
     return jsonify({"status": "stopped"})
 
 
+# =====================================================================
+# ===== CRYPTO API ROUTES (CRYPTO-EOS Bybit Perps Module) =====
+# =====================================================================
+
+def _crypto_table_exists(conn, table_name: str) -> bool:
+    """Check if a crypto table exists in the shared DB."""
+    cursor = conn.cursor()
+    cursor.execute(
+        "SELECT name FROM sqlite_master WHERE type='table' AND name=?",
+        (table_name,),
+    )
+    return cursor.fetchone() is not None
+
+
+@app.route("/api/crypto/overview")
+def api_crypto_overview():
+    """Crypto portfolio summary across all sessions."""
+    conn = get_db()
+    if not _crypto_table_exists(conn, "crypto_sessions"):
+        conn.close()
+        return jsonify({
+            "total_sessions": 0, "total_trades": 0,
+            "total_pnl_usdt": 0.0, "win_rate": 0.0,
+            "current_capital_usdt": 0.0, "initial_capital_usdt": 0.0,
+        })
+
+    cursor = conn.cursor()
+
+    cursor.execute("SELECT COUNT(*) as count FROM crypto_sessions")
+    total_sessions = cursor.fetchone()["count"]
+
+    cursor.execute("SELECT COUNT(*) as count FROM crypto_trades WHERE status='CLOSED'")
+    total_trades = cursor.fetchone()["count"]
+
+    cursor.execute("""
+        SELECT COALESCE(SUM(total_pnl_usdt), 0) as total_pnl FROM crypto_sessions
+        WHERE total_pnl_usdt IS NOT NULL
+    """)
+    total_pnl = cursor.fetchone()["total_pnl"]
+
+    cursor.execute("""
+        SELECT COUNT(*) as total,
+               SUM(CASE WHEN pnl_usdt > 0 THEN 1 ELSE 0 END) as wins
+        FROM crypto_trades WHERE status='CLOSED'
+    """)
+    row = cursor.fetchone()
+    win_rate = (row["wins"] / row["total"] * 100) if row["total"] and row["total"] > 0 else 0
+
+    cursor.execute("""
+        SELECT initial_capital_usdt, final_capital_usdt
+        FROM crypto_sessions ORDER BY created_at DESC LIMIT 1
+    """)
+    latest = cursor.fetchone()
+    initial_cap = latest["initial_capital_usdt"] if latest else 10000.0
+    current_cap = latest["final_capital_usdt"] if latest and latest["final_capital_usdt"] else initial_cap
+
+    conn.close()
+    return jsonify({
+        "total_sessions":       total_sessions,
+        "total_trades":         total_trades,
+        "total_pnl_usdt":       round(total_pnl, 2),
+        "win_rate":             round(win_rate, 1),
+        "current_capital_usdt": round(current_cap, 2),
+        "initial_capital_usdt": round(initial_cap, 2),
+    })
+
+
+@app.route("/api/crypto/sessions")
+def api_crypto_sessions():
+    """List all crypto trading sessions."""
+    conn = get_db()
+    if not _crypto_table_exists(conn, "crypto_sessions"):
+        conn.close()
+        return jsonify([])
+
+    cursor = conn.cursor()
+    cursor.execute("""
+        SELECT session_id, start_date, end_date, symbols,
+               initial_capital_usdt, final_capital_usdt,
+               total_pnl_usdt, total_trades, win_rate,
+               max_drawdown_usdt, created_at, mode
+        FROM crypto_sessions ORDER BY created_at DESC
+    """)
+    sessions = [dict(r) for r in cursor.fetchall()]
+    conn.close()
+    return jsonify(sessions)
+
+
+@app.route("/api/crypto/session/<session_id>")
+def api_crypto_session_detail(session_id):
+    """Detail view for a crypto session."""
+    conn = get_db()
+    if not _crypto_table_exists(conn, "crypto_sessions"):
+        conn.close()
+        return jsonify({"error": "Crypto tables not initialized"}), 404
+
+    cursor = conn.cursor()
+    cursor.execute("SELECT * FROM crypto_sessions WHERE session_id=?", (session_id,))
+    row = cursor.fetchone()
+    if not row:
+        conn.close()
+        return jsonify({"error": "Session not found"}), 404
+
+    session = dict(row)
+
+    cursor.execute("""
+        SELECT * FROM crypto_trades WHERE session_id=?
+        ORDER BY entry_date, entry_time
+    """, (session_id,))
+    trades = [dict(r) for r in cursor.fetchall()]
+
+    cursor.execute("""
+        SELECT * FROM crypto_daily_snapshots WHERE session_id=? ORDER BY date
+    """, (session_id,))
+    snapshots = [dict(r) for r in cursor.fetchall()]
+
+    conn.close()
+    return jsonify({"session": session, "trades": trades, "snapshots": snapshots})
+
+
+@app.route("/api/crypto/trades")
+def api_crypto_trades():
+    """Get crypto trades, optional ?session_id= filter."""
+    session_id = request.args.get("session_id")
+    conn = get_db()
+    if not _crypto_table_exists(conn, "crypto_trades"):
+        conn.close()
+        return jsonify([])
+
+    cursor = conn.cursor()
+    if session_id:
+        cursor.execute("""
+            SELECT * FROM crypto_trades WHERE session_id=? AND status='CLOSED'
+            ORDER BY entry_date DESC, entry_time DESC
+        """, (session_id,))
+    else:
+        cursor.execute("""
+            SELECT * FROM crypto_trades WHERE status='CLOSED'
+            ORDER BY entry_date DESC, entry_time DESC LIMIT 100
+        """)
+
+    trades = [dict(r) for r in cursor.fetchall()]
+    conn.close()
+    return jsonify(trades)
+
+
+@app.route("/api/crypto/snapshots")
+def api_crypto_snapshots():
+    """Get crypto daily snapshots."""
+    session_id = request.args.get("session_id")
+    conn = get_db()
+    if not _crypto_table_exists(conn, "crypto_daily_snapshots"):
+        conn.close()
+        return jsonify([])
+
+    cursor = conn.cursor()
+    if session_id:
+        cursor.execute(
+            "SELECT * FROM crypto_daily_snapshots WHERE session_id=? ORDER BY date",
+            (session_id,),
+        )
+    else:
+        cursor.execute("SELECT * FROM crypto_daily_snapshots ORDER BY date DESC LIMIT 100")
+
+    snapshots = [dict(r) for r in cursor.fetchall()]
+    conn.close()
+    return jsonify(snapshots)
+
+
+@app.route("/api/crypto/equity_curve")
+def api_crypto_equity_curve():
+    """Crypto equity curve data for Chart.js."""
+    session_id = request.args.get("session_id")
+    conn = get_db()
+    if not _crypto_table_exists(conn, "crypto_daily_snapshots"):
+        conn.close()
+        return jsonify([])
+
+    cursor = conn.cursor()
+    if session_id:
+        cursor.execute("""
+            SELECT date, ending_capital_usdt, daily_pnl_usdt, daily_pnl_pct
+            FROM crypto_daily_snapshots WHERE session_id=? ORDER BY date
+        """, (session_id,))
+    else:
+        cursor.execute("""
+            SELECT date, ending_capital_usdt, daily_pnl_usdt, daily_pnl_pct
+            FROM crypto_daily_snapshots ORDER BY date
+        """)
+
+    data = [dict(r) for r in cursor.fetchall()]
+    conn.close()
+    return jsonify(data)
+
+
+@app.route("/api/crypto/positions")
+def api_crypto_positions():
+    """Get open crypto positions."""
+    session_id = request.args.get("session_id")
+    conn = get_db()
+    if not _crypto_table_exists(conn, "crypto_positions"):
+        conn.close()
+        return jsonify([])
+
+    cursor = conn.cursor()
+    query = "SELECT * FROM crypto_positions WHERE status='OPEN'"
+    params = []
+    if session_id:
+        query += " AND session_id=?"
+        params.append(session_id)
+    cursor.execute(query, params)
+    positions = [dict(r) for r in cursor.fetchall()]
+    conn.close()
+    return jsonify(positions)
+
+
+@app.route("/api/crypto/validations")
+def api_crypto_validations():
+    """Get crypto AI validation logs."""
+    session_id = request.args.get("session_id")
+    limit = request.args.get("limit", 50, type=int)
+    conn = get_db()
+    if not _crypto_table_exists(conn, "crypto_validation_logs"):
+        conn.close()
+        return jsonify([])
+
+    cursor = conn.cursor()
+    if session_id:
+        cursor.execute("""
+            SELECT * FROM crypto_validation_logs WHERE session_id=?
+            ORDER BY timestamp DESC LIMIT ?
+        """, (session_id, limit))
+    else:
+        cursor.execute(
+            "SELECT * FROM crypto_validation_logs ORDER BY timestamp DESC LIMIT ?",
+            (limit,),
+        )
+
+    logs = [dict(r) for r in cursor.fetchall()]
+    conn.close()
+    return jsonify(logs)
+
+
+@app.route("/api/crypto/status")
+def api_crypto_status():
+    """Status of crypto live runner process."""
+    return jsonify({
+        "crypto_live_running": _is_process_running("crypto_live"),
+    })
+
+
+@app.route("/api/crypto/start_live", methods=["POST"])
+def api_crypto_start_live():
+    """Start the CRYPTO live runner as a subprocess."""
+    if _is_process_running("crypto_live"):
+        return jsonify({"error": "Crypto runner already running"}), 409
+
+    data = request.get_json(silent=True) or {}
+    paper_trade = data.get("paper_trade", True)
+    from CRYPTO.config import CRYPTO_PAIRS as _pairs, CRYPTO_CONFIG as _ccfg
+    symbols = data.get("symbols") or list(_pairs.keys())
+    capital = data.get("initial_capital_usdt", _ccfg["total_capital_usdt"])
+
+    # Use standalone launcher script
+    cmd_parts = [
+        sys.executable, "-m", "CRYPTO.run_crypto_live",
+        "--symbols", *symbols,
+        "--capital", str(capital),
+    ]
+    if paper_trade:
+        cmd_parts.append("--paper")
+
+    try:
+        log_fh = _open_log_file("crypto_live")
+        with _process_lock:
+            proc = subprocess.Popen(
+                cmd_parts,
+                cwd=PROJECT_ROOT,
+                stdout=log_fh,
+                stderr=subprocess.STDOUT,
+                creationflags=subprocess.CREATE_NEW_PROCESS_GROUP if os.name == "nt" else 0,
+            )
+            _running_processes["crypto_live"] = proc
+
+        mode_str = "PAPER" if paper_trade else "LIVE"
+        return jsonify({
+            "status":   "started",
+            "pid":      proc.pid,
+            "mode":     mode_str,
+            "symbols":  symbols,
+        })
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route("/api/crypto/stop_live", methods=["POST"])
+def api_crypto_stop_live():
+    """Stop the crypto live runner subprocess."""
+    with _process_lock:
+        proc = _running_processes.get("crypto_live")
+        if proc is None or proc.poll() is not None:
+            _running_processes["crypto_live"] = None
+            return jsonify({"status": "not_running"})
+
+        try:
+            if os.name == "nt":
+                proc.terminate()
+            else:
+                proc.send_signal(signal.SIGINT)
+            proc.wait(timeout=10)
+        except subprocess.TimeoutExpired:
+            proc.kill()
+        finally:
+            _running_processes["crypto_live"] = None
+
+    return jsonify({"status": "stopped"})
+
+
+# ===== PROCESS LOG ENDPOINTS =====
+
+@app.route("/api/logs/<process_type>")
+def api_logs(process_type):
+    """Get subprocess log output (last N lines)."""
+    if process_type not in _log_files:
+        return jsonify({"error": "Invalid process type"}), 400
+    lines = request.args.get("lines", 100, type=int)
+    content = _read_log_tail(process_type, lines)
+    return jsonify({
+        "process_type": process_type,
+        "running": _is_process_running(process_type),
+        "log": content,
+    })
+
+
+@app.route("/api/logs/<process_type>/clear", methods=["POST"])
+def api_logs_clear(process_type):
+    """Clear a process log file."""
+    if process_type not in _log_files:
+        return jsonify({"error": "Invalid process type"}), 400
+    path = _get_log_path(process_type)
+    try:
+        with open(path, "w", encoding="utf-8") as f:
+            f.write("")
+        return jsonify({"status": "cleared"})
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
 # ===== MAIN =====
 
 if __name__ == "__main__":
-    print("=" * 50)
-    print("EOS DASHBOARD")
-    print("=" * 50)
+    print("=" * 55)
+    print("EOS + CRYPTO UNIFIED DASHBOARD")
+    print("=" * 55)
     print(f"Database: {DB_PATH}")
-    print(f"URL: http://localhost:5000")
-    print("=" * 50)
-    app.run(debug=True, port=5000)
+    print(f"URL:      http://localhost:5000")
+    print("=" * 55)
+    app.run(debug=False, port=5000)
