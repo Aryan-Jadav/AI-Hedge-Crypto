@@ -363,8 +363,11 @@
 <body>
     <!-- Header -->
     <div class="header">
-        <h1><span>EOS</span> Trading Dashboard</h1>
+        <h1><span>EOS</span> + <span style="color:var(--amber)">CRYPTO</span> Unified Dashboard</h1>
         <div class="header-right">
+            <!-- Credentials status badges -->
+            <span id="dhanCredBadge" style="font-size:11px;padding:3px 8px;border-radius:6px;background:rgba(239,68,68,0.15);color:#ef4444;border:1px solid rgba(239,68,68,0.3)">Dhan: ✗</span>
+            <span id="bybitCredBadge" style="font-size:11px;padding:3px 8px;border-radius:6px;background:rgba(239,68,68,0.15);color:#ef4444;border:1px solid rgba(239,68,68,0.3);margin-right:8px">Bybit: ✗</span>
             <select class="session-select" id="sessionSelect" onchange="loadSession()">
                 <option value="">All Sessions</option>
             </select>
@@ -415,7 +418,7 @@
                 <span class="status-dot stopped" id="liveStatusDot"></span>
                 <span id="liveStatusText" style="font-size:12px;color:#6b7280">Stopped</span>
             </div>
-            <button class="ctrl-btn btn-start" id="btnStartLive" onclick="startLive()">▶ Start</button>
+            <button class="ctrl-btn btn-start" id="btnStartLive" onclick="openLiveModal()">▶ Start</button>
             <button class="ctrl-btn btn-stop" id="btnStopLive" onclick="stopProcess('live')" disabled>■ Stop</button>
         </div>
 
@@ -445,7 +448,7 @@
             <div class="modal">
                 <h2>Start Backtest</h2>
                 <p style="font-size:13px;color:var(--muted);margin-bottom:18px;">
-                    Runs on all <strong style="color:var(--white)">20 F&amp;O symbols</strong> from config
+                    Runs on all <strong style="color:var(--white)">20 F&amp;O symbols</strong> · Uses Dhan API if configured, otherwise Yahoo Finance + Black-Scholes sim
                 </p>
                 <div class="modal-field">
                     <label>Start Date</label>
@@ -455,9 +458,89 @@
                     <label>End Date</label>
                     <input type="date" id="btEndDate">
                 </div>
+                <div class="modal-field">
+                    <label>Initial Capital (₹)</label>
+                    <input type="number" id="btCapital" value="500000" min="10000" step="10000">
+                </div>
                 <div class="modal-actions">
                     <button class="modal-cancel" onclick="closeBTModal()">Cancel</button>
                     <button class="modal-confirm" onclick="submitBacktest()">▶ Run Backtest</button>
+                </div>
+            </div>
+        </div>
+
+        <!-- Live Runner Modal -->
+        <div class="modal-overlay" id="liveModal">
+            <div class="modal">
+                <h2>Start Live Runner</h2>
+                <p style="font-size:13px;color:var(--muted);margin-bottom:18px;">
+                    Monitors all <strong style="color:var(--white)">20 F&amp;O symbols</strong> · Paper mode uses Yahoo Finance sim if no Dhan creds
+                </p>
+                <div class="modal-field">
+                    <label>Mode</label>
+                    <select id="liveMode">
+                        <option value="paper">Paper Trade (simulated, no real orders)</option>
+                        <option value="live">Live Trade (real orders via Dhan API)</option>
+                    </select>
+                </div>
+                <div class="modal-field">
+                    <label>Initial Capital (₹)</label>
+                    <input type="number" id="liveCapital" value="500000" min="10000" step="10000">
+                </div>
+                <div class="modal-actions">
+                    <button class="modal-cancel" onclick="closeLiveModal()">Cancel</button>
+                    <button class="modal-confirm" onclick="submitLive()">▶ Start Runner</button>
+                </div>
+            </div>
+        </div>
+
+        <!-- Crypto Live Modal -->
+        <div class="modal-overlay" id="cryptoLiveModal">
+            <div class="modal">
+                <h2 style="color:var(--amber)">Start Crypto Live Runner</h2>
+                <p style="font-size:13px;color:var(--muted);margin-bottom:18px;">
+                    Trades <strong style="color:var(--white)">BTC/ETH/SOL/BNB/XRP</strong> perps on Bybit · Paper mode polls public REST, no credentials needed
+                </p>
+                <div class="modal-field">
+                    <label>Mode</label>
+                    <select id="cryptoLiveMode">
+                        <option value="paper">Paper Trade (simulated, no real orders)</option>
+                        <option value="live">Live Trade (real orders via Bybit API)</option>
+                    </select>
+                </div>
+                <div class="modal-field">
+                    <label>Capital (USDT)</label>
+                    <input type="number" id="cryptoLiveCapital" value="10000" min="100" step="100">
+                </div>
+                <div class="modal-actions">
+                    <button class="modal-cancel" onclick="closeCryptoLiveModal()">Cancel</button>
+                    <button class="modal-confirm" style="background:linear-gradient(180deg,#f59e0b,#d97706)" onclick="submitCryptoLive()">▶ Start Crypto</button>
+                </div>
+            </div>
+        </div>
+
+        <!-- Crypto Backtest Modal -->
+        <div class="modal-overlay" id="cryptoBTModal">
+            <div class="modal">
+                <h2 style="color:var(--amber)">Start Crypto Backtest</h2>
+                <p style="font-size:13px;color:var(--muted);margin-bottom:18px;">
+                    Uses <strong style="color:var(--white)">Bybit public klines</strong> · No API credentials needed
+                </p>
+                <div class="modal-field">
+                    <label>Start Date</label>
+                    <input type="date" id="cryptoBTStartDate">
+                </div>
+                <div class="modal-field">
+                    <label>End Date</label>
+                    <input type="date" id="cryptoBTEndDate">
+                </div>
+                <div class="modal-field">
+                    <label>Capital (USDT)</label>
+                    <input type="number" id="cryptoBTCapital" value="10000" min="100" step="100">
+                </div>
+                <div class="modal-actions">
+                    <button class="modal-cancel" onclick="closeCryptoBTModal()">Cancel</button>
+                    <button class="modal-confirm" style="background:linear-gradient(180deg,#f59e0b,#d97706)" onclick="submitCryptoBT()">▶ Run Backtest</button>
                 </div>
             </div>
         </div>
@@ -570,16 +653,36 @@
 
             <!-- Crypto Controls -->
             <div class="controls-bar" style="margin-bottom:24px;">
-                <span class="ctrl-label">CRYPTO RUNNER</span>
+                <span class="ctrl-label">CRYPTO BACKTEST</span>
+                <div class="ctrl-group">
+                    <span class="status-dot stopped" id="cryptoBTDot"></span>
+                    <span style="font-size:13px;color:var(--muted2);" id="cryptoBTStatusText">Stopped</span>
+                </div>
+                <button class="ctrl-btn btn-start" id="cryptoBTStartBtn" onclick="openCryptoBTModal()" style="background:linear-gradient(180deg,#f59e0b,#d97706);">▶ Start Backtest</button>
+                <button class="ctrl-btn btn-stop" id="cryptoBTStopBtn" onclick="stopProcess('crypto_backtest')" disabled>■ Stop</button>
+
+                <div class="ctrl-divider"></div>
+
+                <span class="ctrl-label">CRYPTO LIVE</span>
                 <div class="ctrl-group">
                     <span class="status-dot stopped" id="cryptoDot"></span>
                     <span style="font-size:13px;color:var(--muted2);" id="cryptoStatusText">Stopped</span>
                 </div>
-                <div class="ctrl-divider"></div>
-                <button class="ctrl-btn btn-start" id="cryptoStartBtn" onclick="cryptoStartLive()">▶ Start Live</button>
+                <button class="ctrl-btn btn-start" id="cryptoStartBtn" onclick="openCryptoLiveModal()">▶ Start Live</button>
                 <button class="ctrl-btn btn-stop" id="cryptoStopBtn" onclick="cryptoStopLive()" disabled>■ Stop</button>
                 <div class="ctrl-divider"></div>
                 <span style="font-size:12px;color:var(--muted2);" id="cryptoModeLabel">Paper Trade Mode</span>
+            </div>
+
+            <!-- Live Market Prices (Bybit - always live via REST) -->
+            <div class="panel" style="margin-bottom:24px;">
+                <div class="section-title" style="display:flex;justify-content:space-between;align-items:center;">
+                    <span>📡 Live Market Prices (Bybit)</span>
+                    <span style="font-size:11px;color:var(--muted2)" id="priceLastUpdate">--</span>
+                </div>
+                <div id="livePriceGrid" style="display:grid;grid-template-columns:repeat(auto-fill,minmax(160px,1fr));gap:12px;padding:4px 0;">
+                    <div class="empty-state">Loading live prices...</div>
+                </div>
             </div>
 
             <!-- Crypto Equity Curve -->
@@ -950,6 +1053,36 @@
         btnStopLive.disabled = !d.live_running;
     }
 
+    /* ── Credentials status ── */
+    async function loadCredentialsStatus() {
+        try {
+            const d = await api("/api/credentials_status");
+            const dhanBadge = document.getElementById("dhanCredBadge");
+            const bybitBadge = document.getElementById("bybitCredBadge");
+            if (d.dhan_configured) {
+                dhanBadge.textContent = "Dhan: ✓";
+                dhanBadge.style.background = "rgba(16,185,129,0.15)";
+                dhanBadge.style.color = "#10b981";
+                dhanBadge.style.borderColor = "rgba(16,185,129,0.3)";
+            } else {
+                dhanBadge.textContent = "Dhan: ✗ (set env vars)";
+                dhanBadge.title = "Set DHAN_CLIENT_ID and DHAN_ACCESS_TOKEN";
+            }
+            if (d.bybit_configured) {
+                bybitBadge.textContent = "Bybit: ✓";
+                bybitBadge.style.background = "rgba(245,158,11,0.15)";
+                bybitBadge.style.color = "#f59e0b";
+                bybitBadge.style.borderColor = "rgba(245,158,11,0.3)";
+            } else {
+                bybitBadge.textContent = "Bybit: public only";
+                bybitBadge.style.background = "rgba(245,158,11,0.10)";
+                bybitBadge.style.color = "#d97706";
+                bybitBadge.style.borderColor = "rgba(245,158,11,0.2)";
+                bybitBadge.title = "Set BYBIT_API_KEY and BYBIT_API_SECRET for live trading";
+            }
+        } catch(e) {}
+    }
+
     /* ── Backtest modal helpers ── */
     function startBacktest() {
         // Pre-fill dates: 30 days ago → today
@@ -961,14 +1094,14 @@
     }
     function closeBTModal() { document.getElementById("btModal").classList.remove("open"); }
     document.getElementById("btModal").addEventListener("click", e => { if (e.target === e.currentTarget) closeBTModal(); });
-    document.addEventListener("keydown", e => { if (e.key === "Escape") closeBTModal(); });
 
     async function submitBacktest() {
         const startDate = document.getElementById("btStartDate").value;
         const endDate = document.getElementById("btEndDate").value;
+        const capital = parseFloat(document.getElementById("btCapital").value) || 500000;
         if (startDate && endDate && startDate > endDate) { alert("Start date must be before end date"); return; }
 
-        const body = {};
+        const body = { initial_capital: capital };
         if (startDate) body.start_date = startDate;
         if (endDate) body.end_date = endDate;
 
@@ -978,33 +1111,116 @@
             body: JSON.stringify(body)
         });
         const d = await res.json();
-        if (d.error) alert("Error: " + d.error);
+        if (d.error) alert("Backtest Error: " + d.error);
         else { loadStatus(); startFastRefresh(); }
     }
 
-    async function startLive() {
-        if (!confirm("Start live paper trading on all 20 F&O symbols?")) return;
+    /* ── Live Runner modal helpers ── */
+    function openLiveModal() { document.getElementById("liveModal").classList.add("open"); }
+    function closeLiveModal() { document.getElementById("liveModal").classList.remove("open"); }
+    document.getElementById("liveModal").addEventListener("click", e => { if (e.target === e.currentTarget) closeLiveModal(); });
+
+    async function submitLive() {
+        const mode = document.getElementById("liveMode").value;
+        const capital = parseFloat(document.getElementById("liveCapital").value) || 500000;
+        const paper = (mode === "paper");
+        closeLiveModal();
         const res = await fetch("/api/start_live", {
             method: "POST", headers: {"Content-Type": "application/json"},
-            body: JSON.stringify({})
+            body: JSON.stringify({ paper_trade: paper, initial_capital: capital })
         });
         const d = await res.json();
-        if (d.error) alert("Error: " + d.error);
+        if (d.error) alert("Live Runner Error: " + d.error);
         else { loadStatus(); startFastRefresh(); }
+    }
+
+    /* ── Crypto Live modal helpers ── */
+    /* ── Crypto Backtest modal ── */
+    function openCryptoBTModal() {
+        const today = new Date();
+        const ago = new Date(); ago.setDate(today.getDate() - 30);
+        document.getElementById("cryptoBTEndDate").value = today.toISOString().slice(0,10);
+        document.getElementById("cryptoBTStartDate").value = ago.toISOString().slice(0,10);
+        document.getElementById("cryptoBTModal").classList.add("open");
+    }
+    function closeCryptoBTModal() { document.getElementById("cryptoBTModal").classList.remove("open"); }
+    document.getElementById("cryptoBTModal").addEventListener("click", e => { if (e.target === e.currentTarget) closeCryptoBTModal(); });
+
+    async function submitCryptoBT() {
+        const startDate = document.getElementById("cryptoBTStartDate").value;
+        const endDate   = document.getElementById("cryptoBTEndDate").value;
+        const capital   = parseFloat(document.getElementById("cryptoBTCapital").value) || 10000;
+        if (startDate && endDate && startDate > endDate) { alert("Start date must be before end date"); return; }
+        closeCryptoBTModal();
+        const body = { initial_capital_usdt: capital };
+        if (startDate) body.start_date = startDate;
+        if (endDate)   body.end_date   = endDate;
+        const res = await fetch("/api/crypto/start_backtest", {
+            method: "POST", headers: {"Content-Type": "application/json"},
+            body: JSON.stringify(body)
+        });
+        const d = await res.json();
+        if (d.error) alert("Crypto Backtest Error: " + d.error);
+        else { cryptoUpdateStatus(); startFastRefresh(); }
+    }
+
+    /* ── Crypto Live modal ── */
+    function openCryptoLiveModal() { document.getElementById("cryptoLiveModal").classList.add("open"); }
+    function closeCryptoLiveModal() { document.getElementById("cryptoLiveModal").classList.remove("open"); }
+    document.getElementById("cryptoLiveModal").addEventListener("click", e => { if (e.target === e.currentTarget) closeCryptoLiveModal(); });
+
+    async function submitCryptoLive() {
+        const mode = document.getElementById("cryptoLiveMode").value;
+        const capital = parseFloat(document.getElementById("cryptoLiveCapital").value) || 10000;
+        const paper = (mode === "paper");
+        closeCryptoLiveModal();
+        const res = await fetch("/api/crypto/start_live", {
+            method: "POST", headers: {"Content-Type": "application/json"},
+            body: JSON.stringify({ paper_trade: paper, initial_capital_usdt: capital })
+        });
+        const d = await res.json();
+        if (d.error) alert("Crypto Start Error: " + d.error);
+        else { cryptoUpdateStatus(); startFastRefresh(); }
     }
 
     async function stopProcess(type) {
         const res = await fetch(`/api/stop/${type}`, { method: "POST" });
-        const d = await res.json();
+        await res.json();
         loadStatus();
+    }
+
+    /* ── Live price feed (Bybit) ── */
+    async function loadLivePrices() {
+        try {
+            const d = await api("/api/crypto/live_prices");
+            const prices = d.prices || [];
+            const grid = document.getElementById("livePriceGrid");
+            const upd = document.getElementById("priceLastUpdate");
+            upd.textContent = "Updated: " + new Date().toLocaleTimeString();
+            if (!prices.length) { grid.innerHTML = '<div class="empty-state">No price data</div>'; return; }
+            grid.innerHTML = prices.map(p => {
+                const chg = p.change_pct_24h || 0;
+                const chgColor = chg >= 0 ? "var(--green)" : "var(--red)";
+                const priceStr = p.last_price >= 1000
+                    ? "$" + p.last_price.toLocaleString("en-US", {minimumFractionDigits:2, maximumFractionDigits:2})
+                    : "$" + p.last_price.toFixed(4);
+                const funding = p.funding_rate ? (p.funding_rate * 100).toFixed(4) + "%" : "--";
+                return `<div style="background:rgba(255,255,255,0.04);border:1px solid var(--border);border-radius:10px;padding:12px 14px;">
+                    <div style="font-size:12px;color:var(--muted2);margin-bottom:4px;">${p.symbol.replace("USDT","")}/USDT</div>
+                    <div style="font-size:15px;font-weight:700;color:var(--white);">${priceStr}</div>
+                    <div style="font-size:12px;color:${chgColor};margin-top:2px;">${chg >= 0 ? "+" : ""}${chg.toFixed(2)}% 24h</div>
+                    <div style="font-size:11px;color:var(--muted2);margin-top:3px;">Fund: ${funding}</div>
+                </div>`;
+            }).join("");
+        } catch(e) { console.error("Live prices error:", e); }
     }
 
     /* ===== Refresh All ===== */
     async function refreshAll() {
-        await Promise.all([loadOverview(), loadSessions(), loadStatus()]);
+        await Promise.all([loadOverview(), loadSessions(), loadStatus(), loadCredentialsStatus()]);
         await Promise.all([loadEquityCurve(), loadPositions(), loadTrades(), loadValidations()]);
         // Also refresh crypto section
-        await Promise.all([cryptoLoadOverview(), cryptoLoadSessions(), cryptoUpdateStatus()]);
+        await Promise.all([cryptoLoadOverview(), cryptoLoadSessions(), cryptoUpdateStatus(), loadLivePrices()]);
         await Promise.all([cryptoLoadEquityCurve(), cryptoLoadPositions(), cryptoLoadTrades(), cryptoLoadValidations()]);
     }
 
@@ -1299,36 +1515,40 @@
     async function cryptoUpdateStatus() {
         try {
             const d = await api("/api/crypto/status");
-            const running = d.crypto_live_running;
-            const dot = document.getElementById("cryptoDot");
-            const txt = document.getElementById("cryptoStatusText");
+
+            // Live runner status
+            const liveRunning = d.crypto_live_running;
+            const dot     = document.getElementById("cryptoDot");
+            const txt     = document.getElementById("cryptoStatusText");
             const startBtn = document.getElementById("cryptoStartBtn");
-            const stopBtn = document.getElementById("cryptoStopBtn");
-            dot.className = "status-dot " + (running ? "running" : "stopped");
-            txt.textContent = running ? "Running" : "Stopped";
-            txt.style.color = running ? "#10b981" : "#6b7280";
-            startBtn.disabled = running;
-            stopBtn.disabled = !running;
-            if (running) {
-                document.getElementById("cryptoModeLabel").textContent = "LIVE Active";
-            } else {
-                document.getElementById("cryptoModeLabel").textContent = "Paper Trade Mode";
+            const stopBtn  = document.getElementById("cryptoStopBtn");
+            dot.className      = "status-dot " + (liveRunning ? "running" : "stopped");
+            txt.textContent    = liveRunning ? "Running" : "Stopped";
+            txt.style.color    = liveRunning ? "#10b981" : "#6b7280";
+            startBtn.disabled  = liveRunning;
+            stopBtn.disabled   = !liveRunning;
+            document.getElementById("cryptoModeLabel").textContent =
+                liveRunning ? "LIVE Active" : "Paper Trade Mode";
+
+            // Backtest status
+            const btRunning = d.crypto_backtest_running;
+            const btDot     = document.getElementById("cryptoBTDot");
+            const btTxt     = document.getElementById("cryptoBTStatusText");
+            const btStart   = document.getElementById("cryptoBTStartBtn");
+            const btStop    = document.getElementById("cryptoBTStopBtn");
+            if (btDot) {
+                btDot.className    = "status-dot " + (btRunning ? "running" : "stopped");
+                btTxt.textContent  = btRunning ? "Running" : "Stopped";
+                btTxt.style.color  = btRunning ? "#10b981" : "#6b7280";
+                btStart.disabled   = btRunning;
+                btStop.disabled    = !btRunning;
             }
         } catch(e) {}
     }
 
     async function cryptoStartLive() {
-        if (!confirm("Start CRYPTO live runner (paper trade mode) on all 5 pairs?")) return;
-        try {
-            const res = await fetch("/api/crypto/start_live", {
-                method: "POST",
-                headers: {"Content-Type": "application/json"},
-                body: JSON.stringify({paper_trade: true})
-            });
-            const d = await res.json();
-            if (d.error) alert("Error: " + d.error);
-            else { cryptoUpdateStatus(); startFastRefresh(); }
-        } catch(e) { alert("Error: " + e); }
+        // Now delegates to modal (openCryptoLiveModal called from button)
+        openCryptoLiveModal();
     }
 
     async function cryptoStopLive() {
@@ -1339,10 +1559,21 @@
         } catch(e) {}
     }
 
+    /* ── ESC closes any open modal ── */
+    document.addEventListener("keydown", e => {
+        if (e.key === "Escape") {
+            closeBTModal();
+            closeLiveModal();
+            closeCryptoLiveModal();
+        }
+    });
+
     /* ===== Init ===== */
     refreshAll();
     // Auto-refresh every 30 seconds
     setInterval(refreshAll, 30000);
+    // Live prices refresh every 10 seconds (Bybit public API, no auth needed)
+    setInterval(loadLivePrices, 10000);
 </script>
 </body>
 </html>

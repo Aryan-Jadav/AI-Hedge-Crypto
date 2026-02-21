@@ -28,23 +28,31 @@ DB_PATH = str(Path(__file__).parent / "portfolio.db")
 EOS_DIR = str(Path(__file__).parent)
 PROJECT_ROOT = str(Path(__file__).parent.parent)
 
+# Ensure PROJECT_ROOT is on sys.path so "EOS" and "CRYPTO" packages are always importable,
+# regardless of whether this file is launched via `python -m EOS.eos_dashboard` or
+# directly as `python EOS/eos_dashboard.py`.
+if PROJECT_ROOT not in sys.path:
+    sys.path.insert(0, PROJECT_ROOT)
+
 # Log directory for subprocess output
 LOG_DIR = str(Path(__file__).parent / "logs")
 os.makedirs(LOG_DIR, exist_ok=True)
 
 # Process tracking for start/stop controls
 _running_processes = {
-    "backtest":    None,   # subprocess.Popen object
-    "live":        None,   # subprocess.Popen object
-    "crypto_live": None,   # CRYPTO live runner subprocess
+    "backtest":       None,   # subprocess.Popen object
+    "live":           None,   # subprocess.Popen object
+    "crypto_live":    None,   # CRYPTO live runner subprocess
+    "crypto_backtest": None,  # CRYPTO backtest subprocess
 }
 _process_lock = threading.Lock()
 
 # Log file paths
 _log_files = {
-    "backtest":    os.path.join(LOG_DIR, "backtest.log"),
-    "live":        os.path.join(LOG_DIR, "live.log"),
-    "crypto_live": os.path.join(LOG_DIR, "crypto_live.log"),
+    "backtest":       os.path.join(LOG_DIR, "backtest.log"),
+    "live":           os.path.join(LOG_DIR, "live.log"),
+    "crypto_live":    os.path.join(LOG_DIR, "crypto_live.log"),
+    "crypto_backtest": os.path.join(LOG_DIR, "crypto_backtest.log"),
 }
 
 
@@ -133,14 +141,18 @@ def api_overview():
         win_rate = (row["wins"] / row["total"] * 100) if row["total"] > 0 else 0
 
     # Aggregate P&L
-    cursor.execute("SELECT COALESCE(SUM(total_pnl), 0) as total_pnl FROM backtests WHERE total_pnl IS NOT NULL")
-    total_pnl = cursor.fetchone()["total_pnl"]
+    cursor.execute("SELECT SUM(total_pnl) as total_pnl FROM backtests")
+    row = cursor.fetchone()
+    total_pnl = row["total_pnl"] if row and row["total_pnl"] is not None else 0.0
 
     # Latest session capital
     cursor.execute("SELECT initial_capital, final_capital FROM backtests ORDER BY created_at DESC LIMIT 1")
     latest = cursor.fetchone()
-    current_capital = latest["final_capital"] if latest and latest["final_capital"] else (latest["initial_capital"] if latest else 500000)
-    initial_capital = latest["initial_capital"] if latest else 500000
+    current_capital = 500000.0
+    initial_capital = 500000.0
+    if latest:
+        initial_capital = latest["initial_capital"]
+        current_capital = latest["final_capital"] if latest["final_capital"] is not None else initial_capital
 
     conn.close()
     return jsonify({
@@ -151,6 +163,7 @@ def api_overview():
         "current_capital": round(current_capital, 2),
         "initial_capital": round(initial_capital, 2)
     })
+
 
 
 @app.route("/api/sessions")
@@ -363,32 +376,46 @@ def api_status():
     })
 
 
+@app.route("/api/credentials_status")
+def api_credentials_status():
+    """Check which API credentials are configured."""
+    from EOS.config import DHAN_CLIENT_ID, DHAN_ACCESS_TOKEN
+    from CRYPTO.config import BYBIT_API_KEY, BYBIT_API_SECRET
+    return jsonify({
+        "dhan_configured": bool(DHAN_CLIENT_ID and DHAN_ACCESS_TOKEN),
+        "bybit_configured": bool(BYBIT_API_KEY and BYBIT_API_SECRET),
+        "bybit_public_ok": True,   # Bybit public endpoints never need auth
+    })
+
+
 @app.route("/api/start_backtest", methods=["POST"])
 def api_start_backtest():
-    """Start a backtest process."""
+    """Start a backtest via the EOS.run_backtest standalone launcher."""
     if _is_process_running("backtest"):
         return jsonify({"error": "Backtest already running"}), 409
 
     data = request.get_json(silent=True) or {}
-    # Default to ALL FNO symbols from config when none provided
     from EOS.config import FNO_STOCKS as _fno
-    symbols = data.get("symbols") or list(_fno.keys())
+    symbols    = data.get("symbols") or list(_fno.keys())
     start_date = data.get("start_date", "")
-    end_date = data.get("end_date", "")
+    end_date   = data.get("end_date", "")
+    capital    = data.get("initial_capital", 500000)
+    expiry     = data.get("expiry_code", 1)
 
-    # Build command – run backtest AND save results to DB
     cmd_parts = [
-        sys.executable, "-c",
-        f"from EOS.eos_backtester import EOSBacktester; "
-        f"bt = EOSBacktester(); "
-        f"result = bt.run_backtest(symbols={repr(symbols)}, "
-        f"start_date={repr(start_date) if start_date else 'None'}, "
-        f"end_date={repr(end_date) if end_date else 'None'}); "
-        f"bt.print_summary(result); "
-        f"bt.save_results_to_db(result)"
+        sys.executable, "-m", "EOS.run_backtest",
+        "--capital", str(capital),
+        "--expiry-code", str(expiry),
     ]
+    if symbols:
+        cmd_parts += ["--symbols"] + symbols
+    if start_date:
+        cmd_parts += ["--start", start_date]
+    if end_date:
+        cmd_parts += ["--end", end_date]
 
     try:
+        env = {**os.environ, "PYTHONIOENCODING": "utf-8", "PYTHONUTF8": "1"}
         log_fh = _open_log_file("backtest")
         with _process_lock:
             proc = subprocess.Popen(
@@ -396,36 +423,41 @@ def api_start_backtest():
                 cwd=PROJECT_ROOT,
                 stdout=log_fh,
                 stderr=subprocess.STDOUT,
-                creationflags=subprocess.CREATE_NEW_PROCESS_GROUP if os.name == 'nt' else 0
+                env=env,
+                creationflags=subprocess.CREATE_NEW_PROCESS_GROUP if os.name == 'nt' else 0,
             )
             _running_processes["backtest"] = proc
 
-        return jsonify({"status": "started", "pid": proc.pid, "symbols": symbols})
+        return jsonify({
+            "status": "started", "pid": proc.pid,
+            "symbols": symbols, "start_date": start_date, "end_date": end_date,
+        })
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
 
 @app.route("/api/start_live", methods=["POST"])
 def api_start_live():
-    """Start a live (paper trade) runner process."""
+    """Start the EOS live runner (paper or live mode)."""
     if _is_process_running("live"):
         return jsonify({"error": "Live runner already running"}), 409
 
     data = request.get_json(silent=True) or {}
-    # Default to ALL FNO symbols from config when none provided
     from EOS.config import FNO_STOCKS as _fno_live
-    symbols = data.get("symbols") or list(_fno_live.keys())
-    capital = data.get("initial_capital", 500000)
+    symbols     = data.get("symbols") or list(_fno_live.keys())
+    capital     = data.get("initial_capital", 500000)
+    paper_trade = data.get("paper_trade", True)
 
-    # Use standalone launcher script instead of fragile python -c
     cmd_parts = [
         sys.executable, "-m", "EOS.run_live",
         "--symbols", *symbols,
         "--capital", str(capital),
-        "--paper",
     ]
+    if paper_trade:
+        cmd_parts.append("--paper")
 
     try:
+        env = {**os.environ, "PYTHONIOENCODING": "utf-8", "PYTHONUTF8": "1"}
         log_fh = _open_log_file("live")
         with _process_lock:
             proc = subprocess.Popen(
@@ -433,11 +465,16 @@ def api_start_live():
                 cwd=PROJECT_ROOT,
                 stdout=log_fh,
                 stderr=subprocess.STDOUT,
-                creationflags=subprocess.CREATE_NEW_PROCESS_GROUP if os.name == 'nt' else 0
+                env=env,
+                creationflags=subprocess.CREATE_NEW_PROCESS_GROUP if os.name == 'nt' else 0,
             )
             _running_processes["live"] = proc
 
-        return jsonify({"status": "started", "pid": proc.pid, "symbols": symbols})
+        mode_str = "PAPER" if paper_trade else "LIVE"
+        return jsonify({
+            "status": "started", "pid": proc.pid,
+            "mode": mode_str, "symbols": symbols,
+        })
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
@@ -445,7 +482,7 @@ def api_start_live():
 @app.route("/api/stop/<process_type>", methods=["POST"])
 def api_stop(process_type):
     """Stop a running backtest or live process."""
-    if process_type not in ("backtest", "live", "crypto_live"):
+    if process_type not in ("backtest", "live", "crypto_live", "crypto_backtest"):
         return jsonify({"error": "Invalid process type"}), 400
 
     with _process_lock:
@@ -502,11 +539,9 @@ def api_crypto_overview():
     cursor.execute("SELECT COUNT(*) as count FROM crypto_trades WHERE status='CLOSED'")
     total_trades = cursor.fetchone()["count"]
 
-    cursor.execute("""
-        SELECT COALESCE(SUM(total_pnl_usdt), 0) as total_pnl FROM crypto_sessions
-        WHERE total_pnl_usdt IS NOT NULL
-    """)
-    total_pnl = cursor.fetchone()["total_pnl"]
+    cursor.execute("SELECT SUM(total_pnl_usdt) as total_pnl FROM crypto_sessions")
+    row_pnl = cursor.fetchone()
+    total_pnl = row_pnl["total_pnl"] if row_pnl and row_pnl["total_pnl"] is not None else 0.0
 
     cursor.execute("""
         SELECT COUNT(*) as total,
@@ -514,15 +549,20 @@ def api_crypto_overview():
         FROM crypto_trades WHERE status='CLOSED'
     """)
     row = cursor.fetchone()
-    win_rate = (row["wins"] / row["total"] * 100) if row["total"] and row["total"] > 0 else 0
+    win_rate = 0.0
+    if row and row["total"] and row["total"] > 0:
+        win_rate = (row["wins"] / row["total"] * 100)
 
     cursor.execute("""
         SELECT initial_capital_usdt, final_capital_usdt
         FROM crypto_sessions ORDER BY created_at DESC LIMIT 1
     """)
     latest = cursor.fetchone()
-    initial_cap = latest["initial_capital_usdt"] if latest else 10000.0
-    current_cap = latest["final_capital_usdt"] if latest and latest["final_capital_usdt"] else initial_cap
+    initial_cap = 10000.0
+    current_cap = 10000.0
+    if latest:
+        initial_cap = latest["initial_capital_usdt"]
+        current_cap = latest["final_capital_usdt"] if latest["final_capital_usdt"] is not None else initial_cap
 
     conn.close()
     return jsonify({
@@ -533,6 +573,7 @@ def api_crypto_overview():
         "current_capital_usdt": round(current_cap, 2),
         "initial_capital_usdt": round(initial_cap, 2),
     })
+
 
 
 @app.route("/api/crypto/sessions")
@@ -711,12 +752,98 @@ def api_crypto_validations():
     return jsonify(logs)
 
 
+@app.route("/api/crypto/live_prices")
+def api_crypto_live_prices():
+    """Fetch live Bybit ticker prices for all configured pairs (no auth needed)."""
+    try:
+        from CRYPTO.data_fetcher import CryptoDataFetcher
+        from CRYPTO.config import CRYPTO_PAIRS
+        df = CryptoDataFetcher()
+        result = df.get_all_tickers()
+        if result.get("error"):
+            return jsonify({"error": result["error"]}), 500
+
+        tickers = result.get("data", {}).get("list", [])
+        pair_set = set(CRYPTO_PAIRS.keys())
+        prices = []
+        for t in tickers:
+            sym = t.get("symbol", "")
+            if sym in pair_set:
+                prices.append({
+                    "symbol":        sym,
+                    "last_price":    float(t.get("lastPrice", 0)),
+                    "change_pct_24h": float(t.get("price24hPcnt", 0)) * 100,
+                    "high_24h":      float(t.get("highPrice24h", 0)),
+                    "low_24h":       float(t.get("lowPrice24h", 0)),
+                    "volume_24h":    float(t.get("volume24h", 0)),
+                    "funding_rate":  float(t.get("fundingRate", 0)),
+                    "open_interest": float(t.get("openInterest", 0)),
+                })
+        # Sort by configured order
+        order = list(CRYPTO_PAIRS.keys())
+        prices.sort(key=lambda x: order.index(x["symbol"]) if x["symbol"] in order else 99)
+        return jsonify({"prices": prices, "count": len(prices)})
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
 @app.route("/api/crypto/status")
 def api_crypto_status():
     """Status of crypto live runner process."""
     return jsonify({
-        "crypto_live_running": _is_process_running("crypto_live"),
+        "crypto_live_running":      _is_process_running("crypto_live"),
+        "crypto_backtest_running":  _is_process_running("crypto_backtest"),
     })
+
+
+@app.route("/api/crypto/start_backtest", methods=["POST"])
+def api_crypto_start_backtest():
+    """Start a CRYPTO backtest via Bybit public klines (no auth needed)."""
+    if _is_process_running("crypto_backtest"):
+        return jsonify({"error": "Crypto backtest already running"}), 409
+
+    data = request.get_json(silent=True) or {}
+    from CRYPTO.config import CRYPTO_PAIRS as _pairs, CRYPTO_CONFIG as _ccfg
+    symbols    = data.get("symbols") or list(_pairs.keys())
+    capital    = data.get("initial_capital_usdt", _ccfg["total_capital_usdt"])
+    start_date = data.get("start_date", "")
+    end_date   = data.get("end_date", "")
+    days       = data.get("days", 30)
+
+    cmd_parts = [
+        sys.executable, "-m", "CRYPTO.run_crypto_backtest",
+        "--symbols", *symbols,
+        "--capital", str(capital),
+        "--days",    str(days),
+    ]
+    if start_date:
+        cmd_parts += ["--start", start_date]
+    if end_date:
+        cmd_parts += ["--end", end_date]
+
+    try:
+        env    = {**os.environ, "PYTHONIOENCODING": "utf-8", "PYTHONUTF8": "1"}
+        log_fh = _open_log_file("crypto_backtest")
+        with _process_lock:
+            proc = subprocess.Popen(
+                cmd_parts,
+                cwd=PROJECT_ROOT,
+                stdout=log_fh,
+                stderr=subprocess.STDOUT,
+                env=env,
+                creationflags=subprocess.CREATE_NEW_PROCESS_GROUP if os.name == "nt" else 0,
+            )
+            _running_processes["crypto_backtest"] = proc
+
+        return jsonify({
+            "status":   "started",
+            "pid":      proc.pid,
+            "symbols":  symbols,
+            "start_date": start_date,
+            "end_date":   end_date,
+        })
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
 
 
 @app.route("/api/crypto/start_live", methods=["POST"])
@@ -741,6 +868,7 @@ def api_crypto_start_live():
         cmd_parts.append("--paper")
 
     try:
+        env = {**os.environ, "PYTHONIOENCODING": "utf-8", "PYTHONUTF8": "1"}
         log_fh = _open_log_file("crypto_live")
         with _process_lock:
             proc = subprocess.Popen(
@@ -748,6 +876,7 @@ def api_crypto_start_live():
                 cwd=PROJECT_ROOT,
                 stdout=log_fh,
                 stderr=subprocess.STDOUT,
+                env=env,
                 creationflags=subprocess.CREATE_NEW_PROCESS_GROUP if os.name == "nt" else 0,
             )
             _running_processes["crypto_live"] = proc
@@ -819,10 +948,11 @@ def api_logs_clear(process_type):
 # ===== MAIN =====
 
 if __name__ == "__main__":
+    port = int(os.environ.get("PORT", 5000))
     print("=" * 55)
     print("EOS + CRYPTO UNIFIED DASHBOARD")
     print("=" * 55)
     print(f"Database: {DB_PATH}")
-    print(f"URL:      http://localhost:5000")
+    print(f"URL:      http://localhost:{port}")
     print("=" * 55)
-    app.run(debug=False, port=5000)
+    app.run(debug=False, host="0.0.0.0", port=port)

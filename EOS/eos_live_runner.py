@@ -12,10 +12,22 @@ Features:
 - Scheduled market hours operation
 """
 
+import sys
 import time
 import threading
 from datetime import datetime, time as dt_time, timedelta
 from typing import Dict, List, Optional, Callable
+from dataclasses import dataclass, field
+from enum import Enum
+
+# Force UTF-8 so Rs / rupee symbol (₹) never crashes on Windows cp1252
+for _stream in (sys.stdout, sys.stderr):
+    if _stream and hasattr(_stream, "reconfigure"):
+        try:
+            _stream.reconfigure(encoding="utf-8", errors="replace")
+        except Exception:
+            pass
+
 from dataclasses import dataclass, field
 from enum import Enum
 
@@ -593,7 +605,7 @@ class EOSLiveRunner:
 
         pnl_str = f"+₹{pnl:.2f}" if pnl >= 0 else f"-₹{abs(pnl):.2f}"
         print(f"\n[EXIT] {symbol}: {exit_reason.value}")
-        print(f"  Entry: ₹{position.entry_price:.2f} → Exit: ₹{exit_price:.2f}")
+        print(f"  Entry: Rs{position.entry_price:.2f} -> Exit: Rs{exit_price:.2f}")
         print(f"  PnL: {pnl_str} ({pnl_pct:+.2f}%)")
 
         # Callback

@@ -367,8 +367,8 @@ class EOSRiskManager:
         if self.position_risks:
             for symbol, pos in self.position_risks.items():
                 pnl_sym = "+" if pos.unrealized_pnl >= 0 else ""
-                print(f"  {symbol}: {pos.option_type} @ ₹{pos.entry_price:.2f} → ₹{pos.current_price:.2f} "
-                      f"({pnl_sym}₹{pos.unrealized_pnl:.2f})")
+                print(f"  {symbol}: {pos.option_type} @ Rs{pos.entry_price:.2f} -> Rs{pos.current_price:.2f} "
+                      f"({pnl_sym}Rs{pos.unrealized_pnl:.2f})")
         else:
             print("  No open positions")
 
