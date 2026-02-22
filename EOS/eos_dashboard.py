@@ -752,37 +752,103 @@ def api_crypto_validations():
     return jsonify(logs)
 
 
-@app.route("/api/crypto/live_prices")
-def api_crypto_live_prices():
-    """Fetch live Bybit ticker prices for all configured pairs (no auth needed)."""
+def _fetch_prices_bybit(pairs_keys):
+    """Try Bybit REST API (primary). Returns list of price dicts or None on failure."""
     try:
         from CRYPTO.data_fetcher import CryptoDataFetcher
-        from CRYPTO.config import CRYPTO_PAIRS
         df = CryptoDataFetcher()
-        result = df.get_all_tickers()
-        if result.get("error"):
-            return jsonify({"error": result["error"]}), 500
 
-        tickers = result.get("data", {}).get("list", [])
-        pair_set = set(CRYPTO_PAIRS.keys())
+        # Try primary domain first, then bytick.com fallback
+        for base in (df.base_url, "https://api.bytick.com/v5"):
+            df.base_url = base
+            result = df.get_all_tickers()
+            if result.get("error"):
+                continue
+            tickers = result.get("data", {}).get("list", [])
+            pair_set = set(pairs_keys)
+            prices = []
+            for t in tickers:
+                sym = t.get("symbol", "")
+                if sym in pair_set:
+                    prices.append({
+                        "symbol":        sym,
+                        "last_price":    float(t.get("lastPrice", 0)),
+                        "change_pct_24h": float(t.get("price24hPcnt", 0)) * 100,
+                        "high_24h":      float(t.get("highPrice24h", 0)),
+                        "low_24h":       float(t.get("lowPrice24h", 0)),
+                        "volume_24h":    float(t.get("volume24h", 0)),
+                        "funding_rate":  float(t.get("fundingRate", 0)),
+                        "open_interest": float(t.get("openInterest", 0)),
+                    })
+            if prices:
+                return prices
+    except Exception:
+        pass
+    return None
+
+
+def _fetch_prices_coingecko(pairs_keys):
+    """Fallback: CoinGecko free API (no key needed, works from any IP)."""
+    import requests as _req
+    # Map Bybit symbols → CoinGecko IDs
+    _CG_MAP = {
+        "BTCUSDT": "bitcoin", "ETHUSDT": "ethereum", "SOLUSDT": "solana",
+        "BNBUSDT": "binancecoin", "XRPUSDT": "ripple",
+    }
+    cg_ids = [_CG_MAP[s] for s in pairs_keys if s in _CG_MAP]
+    if not cg_ids:
+        return None
+    try:
+        url = "https://api.coingecko.com/api/v3/coins/markets"
+        resp = _req.get(url, params={
+            "vs_currency": "usd", "ids": ",".join(cg_ids),
+            "order": "market_cap_desc", "sparkline": "false",
+        }, timeout=15)
+        resp.raise_for_status()
+        data = resp.json()
+        # Reverse map CoinGecko ID → Bybit symbol
+        _REV = {v: k for k, v in _CG_MAP.items()}
         prices = []
-        for t in tickers:
-            sym = t.get("symbol", "")
-            if sym in pair_set:
+        for coin in data:
+            sym = _REV.get(coin["id"])
+            if sym and sym in pairs_keys:
                 prices.append({
                     "symbol":        sym,
-                    "last_price":    float(t.get("lastPrice", 0)),
-                    "change_pct_24h": float(t.get("price24hPcnt", 0)) * 100,
-                    "high_24h":      float(t.get("highPrice24h", 0)),
-                    "low_24h":       float(t.get("lowPrice24h", 0)),
-                    "volume_24h":    float(t.get("volume24h", 0)),
-                    "funding_rate":  float(t.get("fundingRate", 0)),
-                    "open_interest": float(t.get("openInterest", 0)),
+                    "last_price":    float(coin.get("current_price", 0)),
+                    "change_pct_24h": float(coin.get("price_change_percentage_24h", 0)),
+                    "high_24h":      float(coin.get("high_24h", 0)),
+                    "low_24h":       float(coin.get("low_24h", 0)),
+                    "volume_24h":    float(coin.get("total_volume", 0)),
+                    "funding_rate":  0.0,   # CoinGecko doesn't have funding rate
+                    "open_interest": 0.0,   # CoinGecko doesn't have OI
                 })
+        return prices if prices else None
+    except Exception:
+        return None
+
+
+@app.route("/api/crypto/live_prices")
+def api_crypto_live_prices():
+    """Fetch live crypto prices. Tries Bybit first, falls back to CoinGecko."""
+    try:
+        from CRYPTO.config import CRYPTO_PAIRS
+        pairs_keys = list(CRYPTO_PAIRS.keys())
+
+        # Try Bybit (primary + bytick.com fallback)
+        prices = _fetch_prices_bybit(pairs_keys)
+        source = "bybit"
+
+        # Fallback to CoinGecko if Bybit is blocked (403 on US servers)
+        if not prices:
+            prices = _fetch_prices_coingecko(pairs_keys)
+            source = "coingecko"
+
+        if not prices:
+            return jsonify({"error": "All price sources failed"}), 503
+
         # Sort by configured order
-        order = list(CRYPTO_PAIRS.keys())
-        prices.sort(key=lambda x: order.index(x["symbol"]) if x["symbol"] in order else 99)
-        return jsonify({"prices": prices, "count": len(prices)})
+        prices.sort(key=lambda x: pairs_keys.index(x["symbol"]) if x["symbol"] in pairs_keys else 99)
+        return jsonify({"prices": prices, "count": len(prices), "source": source})
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
