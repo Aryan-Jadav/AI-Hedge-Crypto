@@ -37,11 +37,6 @@ for _stream in (sys.stdout, sys.stderr):
         except Exception:
             pass
 
-import threading
-from datetime import datetime, timedelta, time as dt_time
-from pathlib import Path
-from typing import Dict, List, Optional, Tuple
-
 # ── make sure project root is importable ──────────────────────────────────────
 _PROJECT_ROOT = str(Path(__file__).parent.parent)
 if _PROJECT_ROOT not in sys.path:
@@ -860,8 +855,6 @@ class EOSPaperLiveRunner:
                 self._close_all_positions("TIME_EXIT")
 
             self._stop_event.wait(self.POLL_INTERVAL)
-
-        self._save_session()
 
     def _close_position(self, sym: str, exit_px: float,
                          exit_reason: str, now: datetime):

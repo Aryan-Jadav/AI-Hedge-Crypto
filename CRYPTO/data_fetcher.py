@@ -75,6 +75,15 @@ class CryptoDataFetcher:
     # REQUEST HELPERS
     # =========================================================================
 
+    # Retry configuration
+    MAX_RETRIES:   int   = 3
+    BASE_DELAY:    float = 1.0    # seconds
+    MAX_DELAY:     float = 30.0   # seconds
+
+    # Errors that should NOT be retried (auth / bad params)
+    _NO_RETRY_KEYWORDS = ("auth", "invalid", "permission", "apikey",
+                          "signature", "param", "not supported")
+
     def _rate_limit(self) -> None:
         """Enforce minimum delay between requests. Mirrors EOS pattern."""
         elapsed = time.time() - self.last_request_time
@@ -82,20 +91,29 @@ class CryptoDataFetcher:
             time.sleep(self.rate_limit_delay - elapsed)
         self.last_request_time = time.time()
 
-    def _get(self, endpoint: str, params: Dict = None, private: bool = False) -> Dict:
-        """
-        Make GET request to Bybit API.
-        Returns parsed JSON or {"error": str} on failure.
-        """
+    @staticmethod
+    def _is_retryable_error(error_msg: str) -> bool:
+        """Return True if the error is transient and worth retrying."""
+        lower = error_msg.lower()
+        for kw in CryptoDataFetcher._NO_RETRY_KEYWORDS:
+            if kw in lower:
+                return False
+        return True
+
+    def _get_raw(self, endpoint: str, params: Dict = None,
+                 private: bool = False) -> Dict:
+        """Single-attempt GET request (no retry)."""
         self._rate_limit()
         url = f"{self.base_url}{endpoint}"
         params = params or {}
 
         try:
             if private:
-                params_str = "&".join(f"{k}={v}" for k, v in sorted(params.items()))
+                params_str = "&".join(
+                    f"{k}={v}" for k, v in sorted(params.items()))
                 headers = self._get_auth_headers(params_str)
-                response = self._session.get(url, params=params, headers=headers, timeout=10)
+                response = self._session.get(
+                    url, params=params, headers=headers, timeout=10)
             else:
                 response = self._session.get(url, params=params, timeout=10)
 
@@ -103,7 +121,8 @@ class CryptoDataFetcher:
             data = response.json()
 
             if data.get("retCode", -1) != 0:
-                return {"error": data.get("retMsg", "Unknown Bybit error"), "data": None}
+                return {"error": data.get("retMsg", "Unknown Bybit error"),
+                        "data": None}
             return {"data": data.get("result", {}), "error": None}
 
         except requests.exceptions.Timeout:
@@ -113,11 +132,9 @@ class CryptoDataFetcher:
         except Exception as e:
             return {"error": f"Unexpected error: {e}", "data": None}
 
-    def _post(self, endpoint: str, payload: Dict = None, private: bool = True) -> Dict:
-        """
-        Make POST request to Bybit API.
-        All POST requests require auth for Bybit v5.
-        """
+    def _post_raw(self, endpoint: str, payload: Dict = None,
+                  private: bool = True) -> Dict:
+        """Single-attempt POST request (no retry)."""
         self._rate_limit()
         url = f"{self.base_url}{endpoint}"
         payload = payload or {}
@@ -125,12 +142,14 @@ class CryptoDataFetcher:
 
         try:
             headers = self._get_auth_headers(payload_str)
-            response = self._session.post(url, data=payload_str, headers=headers, timeout=10)
+            response = self._session.post(
+                url, data=payload_str, headers=headers, timeout=10)
             response.raise_for_status()
             data = response.json()
 
             if data.get("retCode", -1) != 0:
-                return {"error": data.get("retMsg", "Unknown Bybit error"), "data": None}
+                return {"error": data.get("retMsg", "Unknown Bybit error"),
+                        "data": None}
             return {"data": data.get("result", {}), "error": None}
 
         except requests.exceptions.Timeout:
@@ -139,6 +158,56 @@ class CryptoDataFetcher:
             return {"error": str(e), "data": None}
         except Exception as e:
             return {"error": f"Unexpected error: {e}", "data": None}
+
+    def _request_with_retry(self, request_func, label: str = "") -> Dict:
+        """
+        Wrap a single-attempt request function with exponential backoff.
+        Retries on transient failures (timeouts, 429, network errors).
+        Does NOT retry auth / invalid-param errors.
+        """
+        last_result: Dict = {"error": "No attempt made", "data": None}
+
+        for attempt in range(self.MAX_RETRIES + 1):
+            result = request_func()
+
+            # Success → return immediately
+            if result.get("error") is None:
+                return result
+
+            last_result = result
+            error_msg = result.get("error", "")
+
+            # Non-retryable error → bail
+            if not self._is_retryable_error(error_msg):
+                return result
+
+            # Last attempt → return the error
+            if attempt == self.MAX_RETRIES:
+                return result
+
+            # Calculate exponential backoff with jitter
+            delay = min(self.BASE_DELAY * (2 ** attempt), self.MAX_DELAY)
+            print(f"[DataFetcher] {label} retry {attempt+1}/{self.MAX_RETRIES}"
+                  f" in {delay:.1f}s: {error_msg}")
+            time.sleep(delay)
+
+        return last_result
+
+    def _get(self, endpoint: str, params: Dict = None,
+             private: bool = False) -> Dict:
+        """GET with automatic retry on transient errors."""
+        return self._request_with_retry(
+            lambda: self._get_raw(endpoint, params, private),
+            label=f"GET {endpoint}",
+        )
+
+    def _post(self, endpoint: str, payload: Dict = None,
+              private: bool = True) -> Dict:
+        """POST with automatic retry on transient errors."""
+        return self._request_with_retry(
+            lambda: self._post_raw(endpoint, payload, private),
+            label=f"POST {endpoint}",
+        )
 
     # =========================================================================
     # PUBLIC MARKET DATA
@@ -302,6 +371,35 @@ class CryptoDataFetcher:
             "symbol":   symbol,
             "orderId":  order_id,
         })
+
+    def get_order_detail(self, symbol: str, order_id: str,
+                         category: str = "linear") -> Dict:
+        """
+        GET /v5/order/realtime - Query a single order by orderId.
+        Returns order status, avgPrice, cumExecQty, orderStatus, etc.
+        Used for fill confirmation after place_order().
+        """
+        return self._get("/order/realtime", {
+            "category": category,
+            "symbol":   symbol,
+            "orderId":  order_id,
+        }, private=True)
+
+    def get_execution_list(self, symbol: str, order_id: str = None,
+                           category: str = "linear",
+                           limit: int = 50) -> Dict:
+        """
+        GET /v5/execution/list - Query trade execution / fill history.
+        Returns list of executions with execPrice, execQty, execFee, etc.
+        """
+        params: Dict[str, Any] = {
+            "category": category,
+            "symbol":   symbol,
+            "limit":    limit,
+        }
+        if order_id:
+            params["orderId"] = order_id
+        return self._get("/execution/list", params, private=True)
 
     def set_leverage(
         self,

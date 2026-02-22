@@ -183,6 +183,64 @@ class CryptoLiveRunner:
     # LIFECYCLE
     # =========================================================================
 
+    def _reconcile_positions(self) -> None:
+        """
+        Reconcile local position state with actual Bybit exchange positions.
+        Called on startup to handle crash recovery.
+
+        - Orphaned exchange positions (not in local state) → close them
+        - Stale local positions (not on exchange) → remove them
+        """
+        if self.paper_trade:
+            return  # No reconciliation needed in paper mode
+
+        print("[CryptoRunner] Reconciling positions with exchange...")
+
+        resp = self.data_fetcher.get_positions()
+        if resp.get("error"):
+            print(f"[CryptoRunner] Position reconciliation failed: "
+                  f"{resp['error']}")
+            return
+
+        exchange_positions = resp.get("data", {}).get("list", [])
+        exchange_symbols: set = set()
+
+        for pos in exchange_positions:
+            size = float(pos.get("size", 0))
+            if size == 0:
+                continue
+
+            symbol   = pos.get("symbol", "")
+            side     = pos.get("side", "")      # "Buy" or "Sell"
+            avg_price = float(pos.get("avgPrice", 0))
+            exchange_symbols.add(symbol)
+
+            # Position exists on exchange but NOT in local state → orphaned
+            if symbol not in self.positions:
+                print(f"[CryptoRunner] ORPHANED position found: "
+                      f"{symbol} {side} size={size} @ ${avg_price:.4f}")
+                # Close it to avoid untracked risk
+                close_side = "Sell" if side == "Buy" else "Buy"
+                close_resp = self.data_fetcher.place_order(
+                    symbol=symbol, side=close_side,
+                    order_type="Market", qty=size, reduce_only=True,
+                )
+                if close_resp.get("error"):
+                    print(f"[CryptoRunner] WARNING: Failed to close "
+                          f"orphaned {symbol}: {close_resp['error']}")
+                else:
+                    print(f"[CryptoRunner] Closed orphaned position: "
+                          f"{symbol}")
+
+        # Clean up local positions that no longer exist on exchange
+        for symbol in list(self.positions.keys()):
+            if symbol not in exchange_symbols:
+                print(f"[CryptoRunner] Removing stale local position: "
+                      f"{symbol}")
+                del self.positions[symbol]
+
+        print("[CryptoRunner] Position reconciliation complete.")
+
     def start(self) -> None:
         """
         Start the live runner. Mirrors EOSLiveRunner.start().
@@ -198,6 +256,9 @@ class CryptoLiveRunner:
 
         # Reset daily state
         self._reset_daily_state()
+
+        # Reconcile positions with exchange (crash recovery)
+        self._reconcile_positions()
 
         # Start new DB session
         today = datetime.now(IST).strftime("%Y-%m-%d")
@@ -537,6 +598,48 @@ class CryptoLiveRunner:
                 "quantity": quantity, "validation": validation.to_dict(),
             })
 
+    def _confirm_order_fill(self, order_id: str, symbol: str,
+                            timeout_seconds: int = 10) -> Optional[Dict]:
+        """
+        Poll order status until filled or timeout.
+        Returns fill info dict with avgPrice, cumExecQty, orderStatus,
+        or None on timeout / rejection.
+        """
+        start = time.time()
+        while time.time() - start < timeout_seconds:
+            resp = self.data_fetcher.get_order_detail(symbol, order_id)
+            if resp.get("error"):
+                time.sleep(0.5)
+                continue
+
+            order_list = resp.get("data", {}).get("list", [])
+            if not order_list:
+                time.sleep(0.5)
+                continue
+
+            order = order_list[0]
+            status = order.get("orderStatus", "")
+
+            if status in ("Filled", "PartiallyFilled"):
+                avg_price = float(order.get("avgPrice", 0))
+                cum_qty   = float(order.get("cumExecQty", 0))
+                return {
+                    "avgPrice":     avg_price,
+                    "cumExecQty":   cum_qty,
+                    "orderStatus":  status,
+                    "orderId":      order_id,
+                }
+            elif status in ("Rejected", "Cancelled", "Deactivated"):
+                print(f"[CryptoRunner] Order {order_id} {status}: "
+                      f"{order.get('rejectReason', 'N/A')}")
+                return None
+
+            time.sleep(0.5)
+
+        print(f"[CryptoRunner] Fill confirmation timeout for {symbol} "
+              f"order={order_id}")
+        return None
+
     def _execute_entry(
         self,
         symbol: str,
@@ -546,13 +649,13 @@ class CryptoLiveRunner:
     ) -> Optional[float]:
         """
         Execute entry order via Bybit API (or simulate in paper mode).
-        Mirrors EOSLiveRunner order execution pattern.
+        In live mode, confirms fill and returns actual avgPrice.
         """
         bybit_side = "Buy" if side == "LONG" else "Sell"
 
         if self.paper_trade:
             print(f"[CryptoRunner] PAPER: Simulating {bybit_side} {symbol} qty={quantity}")
-            return expected_price  # Use current market price
+            return expected_price
 
         # Live trading: place market order
         resp = self.data_fetcher.place_order(
@@ -565,10 +668,26 @@ class CryptoLiveRunner:
             print(f"[CryptoRunner] Order failed for {symbol}: {resp['error']}")
             return None
 
-        # In live mode, fetch actual fill price
-        actual_price = self.data_fetcher.get_current_price(symbol) or expected_price
-        print(f"[CryptoRunner] LIVE: Order placed {symbol} {bybit_side} qty={quantity} @ ~${actual_price:.4f}")
-        return actual_price
+        # Extract orderId from response
+        order_id = resp.get("data", {}).get("orderId")
+        if not order_id:
+            print(f"[CryptoRunner] No orderId in response for {symbol}")
+            # Fallback: use current market price (old behavior)
+            return self.data_fetcher.get_current_price(symbol) or expected_price
+
+        # Confirm fill and get actual average price
+        fill_info = self._confirm_order_fill(order_id, symbol, timeout_seconds=10)
+        if not fill_info:
+            print(f"[CryptoRunner] WARNING: Fill not confirmed for {symbol}. "
+                  f"Falling back to market price.")
+            return self.data_fetcher.get_current_price(symbol) or expected_price
+
+        avg_price = fill_info["avgPrice"]
+        cum_qty   = fill_info["cumExecQty"]
+        print(f"[CryptoRunner] LIVE: {symbol} {bybit_side} FILLED | "
+              f"avgPrice=${avg_price:.4f} | qty={cum_qty} | "
+              f"orderId={order_id}")
+        return avg_price
 
     def _execute_exit(
         self,
@@ -577,8 +696,7 @@ class CryptoLiveRunner:
         quantity: float,
         expected_price: float,
     ) -> Optional[float]:
-        """Execute exit order (or simulate in paper mode)."""
-        # To close a LONG → Sell; to close a SHORT → Buy
+        """Execute exit order (or simulate in paper mode). Confirms fill."""
         bybit_side = "Sell" if side == "LONG" else "Buy"
 
         if self.paper_trade:
@@ -595,7 +713,19 @@ class CryptoLiveRunner:
             print(f"[CryptoRunner] Exit order failed for {symbol}: {resp['error']}")
             return None
 
-        return self.data_fetcher.get_current_price(symbol) or expected_price
+        # Confirm fill
+        order_id = resp.get("data", {}).get("orderId")
+        if not order_id:
+            return self.data_fetcher.get_current_price(symbol) or expected_price
+
+        fill_info = self._confirm_order_fill(order_id, symbol, timeout_seconds=10)
+        if not fill_info:
+            return self.data_fetcher.get_current_price(symbol) or expected_price
+
+        avg_price = fill_info["avgPrice"]
+        print(f"[CryptoRunner] LIVE: {symbol} EXIT FILLED @ ${avg_price:.4f} | "
+              f"orderId={order_id}")
+        return avg_price
 
     # =========================================================================
     # POSITION MONITORING (mirrors EOSLiveRunner._monitor_positions)

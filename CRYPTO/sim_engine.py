@@ -31,6 +31,11 @@ if _PROJECT_ROOT not in sys.path:
 
 from CRYPTO.config import CRYPTO_CONFIG, CRYPTO_PAIRS
 from CRYPTO.data_fetcher import CryptoDataFetcher
+from CRYPTO.ai_validator import (
+    CryptoAIValidator, CryptoSignalData,
+    CryptoValidationResult,
+)
+from CRYPTO.market_context import CryptoMarketContext
 
 IST = pytz.timezone("Asia/Kolkata")
 requests.packages.urllib3.disable_warnings()
@@ -516,14 +521,24 @@ class CryptoPaperLiveRunner:
 
     def __init__(self, symbols: List[str] = None,
                  initial_capital_usdt: float = 10000.0,
-                 paper_trade: bool = True):
+                 paper_trade: bool = True,
+                 skip_ai: bool = False):
         self.symbols               = symbols or list(CRYPTO_PAIRS.keys())
         self.initial_capital_usdt  = initial_capital_usdt
         self.config                = CRYPTO_CONFIG
         self.paper_trade           = paper_trade
+        self.skip_ai               = skip_ai
         self.is_running            = False
         self._stop_event           = threading.Event()
         self._thread: Optional[threading.Thread] = None
+
+        # Capital-based sizing: allocate 10% of capital per trade
+        self.capital_per_trade_pct = 0.10
+
+        # AI validation & market context (same as live_runner)
+        self.ai_validator   = CryptoAIValidator()
+        self.market_ctx_mgr = CryptoMarketContext()
+        self._df            = CryptoDataFetcher()   # shared fetcher for klines
 
         # state
         self.positions: Dict[str, Dict]  = {}
@@ -632,6 +647,7 @@ class CryptoPaperLiveRunner:
                     exit_reason = None
                     exit_px     = cur_px
 
+                    # 1) Initial stop loss
                     if side == "LONG":
                         if cur_px <= pos["stop_loss"]:
                             exit_reason = "INITIAL_SL";   exit_px = pos["stop_loss"]
@@ -643,8 +659,49 @@ class CryptoPaperLiveRunner:
                         elif cur_px >= pos["trailing_sl"] and pos["trailing_sl"] < pos["stop_loss"]:
                             exit_reason = "TRAILING_SL";  exit_px = pos["trailing_sl"]
 
-                    # session-end force close
-                    if t >= dt_time(13, 50):
+                    # 2) SMA crossover exit (after 60 min hold)
+                    if not exit_reason:
+                        hold_min = ((now - pos["entry_time"])
+                                    .total_seconds() / 60)
+                        if hold_min >= 60:
+                            try:
+                                kl = self._df.get_kline(
+                                    sym, interval="5", limit=30)
+                                if not kl.get("error"):
+                                    bars = list(reversed(
+                                        kl["data"].get("list", [])))
+                                    closes = [float(c[4]) for c in bars
+                                              if len(c) >= 5]
+                                    if len(closes) >= 20:
+                                        sma8  = sum(closes[-8:]) / 8
+                                        sma20 = sum(closes[-20:]) / 20
+                                        if (side == "LONG"
+                                                and sma8 < sma20):
+                                            exit_reason = "SMA_CROSSOVER"
+                                        elif (side == "SHORT"
+                                                and sma8 > sma20):
+                                            exit_reason = "SMA_CROSSOVER"
+                            except Exception:
+                                pass
+
+                    # 3) Funding flip exit
+                    if not exit_reason:
+                        try:
+                            cur_funding = float(
+                                tk.get("fundingRate", 0))
+                            fund_flip_thresh = (
+                                self.config["funding_rate_threshold"] * 2)
+                            if (side == "LONG"
+                                    and cur_funding > fund_flip_thresh):
+                                exit_reason = "FUNDING_FLIP"
+                            elif (side == "SHORT"
+                                    and cur_funding < -fund_flip_thresh):
+                                exit_reason = "FUNDING_FLIP"
+                        except Exception:
+                            pass
+
+                    # 4) Session-end force close
+                    if not exit_reason and t >= dt_time(13, 50):
                         exit_reason = "TIME_EXIT"
 
                     if exit_reason:
@@ -667,32 +724,120 @@ class CryptoPaperLiveRunner:
                             continue
                         pct_chg = (cur_px - prev) / prev * 100
 
-                        if abs(pct_chg) > price_thresh:
-                            side = "SHORT" if pct_chg > 0 else "LONG"
-                            min_qty = CRYPTO_PAIRS.get(sym, {}).get("min_qty", 0.001)
-                            if side == "LONG":
-                                sl       = cur_px * (1 - sl_pct)
-                                trail_sl = sl
-                            else:
-                                sl       = cur_px * (1 + sl_pct)
-                                trail_sl = sl
+                        if abs(pct_chg) <= price_thresh:
+                            continue
 
-                            self.positions[sym] = {
-                                "side":       side,
-                                "entry_px":   cur_px,
-                                "entry_time": now,
-                                "entry_date": now.strftime("%Y-%m-%d"),
-                                "entry_time_s": now.strftime("%H:%M"),
-                                "stop_loss":  sl,
-                                "trailing_sl": trail_sl,
-                                "highest":    cur_px,
-                                "lowest":     cur_px,
-                                "min_qty":    min_qty,
-                                "price_chg":  round(pct_chg, 2),
-                            }
-                            print(f"[CryptoPaper] ENTRY {sym} {side} @ {cur_px:.4f}"
-                                  f"  Δ={pct_chg:.1f}%")
+                        # ── secondary confirmation: funding rate ──
+                        funding_rate = float(tk.get("fundingRate", 0))
+                        funding_thresh = self.config["funding_rate_threshold"]
+                        funding_extreme = abs(funding_rate) > funding_thresh
+
+                        # ── secondary confirmation: volume spike ──
+                        volume_spike = False
+                        try:
+                            vol_resp = self._df.get_kline(sym, interval="5",
+                                                          limit=25)
+                            if not vol_resp.get("error"):
+                                klines = list(reversed(
+                                    vol_resp["data"].get("list", [])))
+                                vols = [float(c[5]) for c in klines
+                                        if len(c) >= 6]
+                                if len(vols) >= 21:
+                                    avg_vol = sum(vols[-21:-1]) / 20
+                                    cur_vol = vols[-1]
+                                    vol_mult = self.config[
+                                        "volume_spike_multiplier"]
+                                    volume_spike = (cur_vol >
+                                                    avg_vol * vol_mult)
+                        except Exception:
+                            pass
+
+                        if not (funding_extreme or volume_spike):
+                            print(f"[CryptoPaper] {sym}: skip – no "
+                                  f"secondary confirmation "
+                                  f"(fund={funding_rate:.6f}, "
+                                  f"vol_spike={volume_spike})")
                             sys.stdout.flush()
+                            continue
+
+                        side = "SHORT" if pct_chg > 0 else "LONG"
+
+                        # ── capital-based position sizing ──
+                        alloc = (self.initial_capital_usdt
+                                 * self.capital_per_trade_pct)
+                        leverage = self.config.get("leverage", 5)
+                        quantity = (alloc * leverage) / cur_px
+                        min_qty = CRYPTO_PAIRS.get(
+                            sym, {}).get("min_qty", 0.001)
+                        quantity = max(quantity, min_qty)
+
+                        if side == "LONG":
+                            sl       = cur_px * (1 - sl_pct)
+                            trail_sl = sl
+                        else:
+                            sl       = cur_px * (1 + sl_pct)
+                            trail_sl = sl
+
+                        # ── AI validation ──
+                        signal_obj = CryptoSignalData(
+                            symbol=sym,
+                            signal_type=side,
+                            entry_price=cur_px,
+                            stop_loss=sl,
+                            price_change_pct=pct_chg,
+                            funding_rate=funding_rate,
+                            funding_rate_extreme=funding_extreme,
+                            volume_spike=volume_spike,
+                            entry_date=now.strftime("%Y-%m-%d"),
+                            entry_time=now.strftime("%H:%M"),
+                            quantity=quantity,
+                        )
+
+                        # Build market context from BTC ticker
+                        btc_tk = _fetch_ticker("BTCUSDT")
+                        mkt_ctx = self.market_ctx_mgr.build_context(
+                            btc_price=(float(btc_tk.get("lastPrice", 0))
+                                       if btc_tk else None),
+                            btc_change_pct=(
+                                float(btc_tk.get("price24hPcnt", 0)) * 100
+                                if btc_tk else None),
+                            btc_funding_rate=(
+                                float(btc_tk.get("fundingRate", 0))
+                                if btc_tk else None),
+                        )
+
+                        validation = self.ai_validator.validate(
+                            signal_obj, mkt_ctx,
+                            skip_ai=self.skip_ai,
+                        )
+                        if validation.result == CryptoValidationResult.REJECT:
+                            print(f"[CryptoPaper] {sym}: REJECTED by AI – "
+                                  f"{validation.reason}")
+                            sys.stdout.flush()
+                            continue
+
+                        self.positions[sym] = {
+                            "side":          side,
+                            "entry_px":      cur_px,
+                            "entry_time":    now,
+                            "entry_date":    now.strftime("%Y-%m-%d"),
+                            "entry_time_s":  now.strftime("%H:%M"),
+                            "stop_loss":     sl,
+                            "trailing_sl":   trail_sl,
+                            "highest":       cur_px,
+                            "lowest":        cur_px,
+                            "quantity":      quantity,
+                            "price_chg":     round(pct_chg, 2),
+                            "funding_rate":  funding_rate,
+                            "volume_spike":  volume_spike,
+                            "ai_confidence": validation.confidence,
+                            "ai_reason":     validation.reason,
+                        }
+                        print(f"[CryptoPaper] ENTRY {sym} {side} "
+                              f"@ {cur_px:.4f}  Δ={pct_chg:.1f}%  "
+                              f"qty={quantity:.6f}  "
+                              f"AI={validation.confidence:.0%}")
+                        sys.stdout.flush()
 
             except Exception as e:
                 print(f"[CryptoPaper] Loop error: {e}")
@@ -700,22 +845,20 @@ class CryptoPaperLiveRunner:
 
             self._stop_event.wait(self.POLL_INTERVAL)
 
-        self._save_session()
-
     def _close_position(self, sym: str, exit_px: float,
                          reason: str, now: datetime):
         if sym not in self.positions:
             return
-        pos     = self.positions.pop(sym)
-        side    = pos["side"]
-        min_qty = pos["min_qty"]
-        entry   = pos["entry_px"]
+        pos      = self.positions.pop(sym)
+        side     = pos["side"]
+        quantity = pos.get("quantity", pos.get("min_qty", 0.001))
+        entry    = pos["entry_px"]
 
         if side == "LONG":
-            pnl = (exit_px - entry) * min_qty
+            pnl = (exit_px - entry) * quantity
         else:
-            pnl = (entry - exit_px) * min_qty
-        pnl_pct  = (pnl / (entry * min_qty)) * 100
+            pnl = (entry - exit_px) * quantity
+        pnl_pct  = (pnl / (entry * quantity)) * 100 if (entry * quantity) else 0
         hold_min = (now - pos["entry_time"]).total_seconds() / 60
 
         self.daily_pnl_usdt += pnl
@@ -730,15 +873,16 @@ class CryptoPaperLiveRunner:
             "exit_date":             now.strftime("%Y-%m-%d"),
             "exit_time":             now.strftime("%H:%M"),
             "exit_price":            round(exit_px, 4),
-            "quantity":              min_qty,
-            "min_qty":               min_qty,   # required by CryptoTradeRecord
+            "quantity":              quantity,
+            "min_qty":               CRYPTO_PAIRS.get(sym, {}).get(
+                                         "min_qty", 0.001),
             "pnl_usdt":              round(pnl, 4),
             "pnl_pct":               round(pnl_pct, 2),
             "exit_reason":           reason,
             "hold_duration_minutes": round(hold_min, 1),
             "price_change_at_entry": pos["price_chg"],
-            "funding_rate_at_entry": 0.0,
-            "volume_spike_at_entry": False,
+            "funding_rate_at_entry": pos.get("funding_rate", 0.0),
+            "volume_spike_at_entry": pos.get("volume_spike", False),
         }
         self.trades_today.append(trade)
         pnl_str = f"+{pnl:.4f}" if pnl >= 0 else f"{pnl:.4f}"

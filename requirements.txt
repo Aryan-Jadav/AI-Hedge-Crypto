@@ -1,0 +1,8 @@
+flask>=3.0.0
+requests>=2.31.0
+pytz>=2023.3
+python-dotenv>=1.0.0
+websockets>=15.0.0
+yfinance>=0.2.60
+gunicorn>=21.2.0
+
