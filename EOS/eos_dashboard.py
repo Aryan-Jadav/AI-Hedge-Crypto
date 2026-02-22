@@ -753,16 +753,17 @@ def api_crypto_validations():
 
 
 def _fetch_prices_bybit(pairs_keys):
-    """Try Bybit REST API (primary). Returns list of price dicts or None on failure."""
+    """Try Bybit REST API (primary). Returns (prices_list, error_str)."""
+    errors = []
     try:
         from CRYPTO.data_fetcher import CryptoDataFetcher
         df = CryptoDataFetcher()
 
-        # Try primary domain first, then bytick.com fallback
         for base in (df.base_url, "https://api.bytick.com/v5"):
             df.base_url = base
             result = df.get_all_tickers()
             if result.get("error"):
+                errors.append(f"{base}: {result['error']}")
                 continue
             tickers = result.get("data", {}).get("list", [])
             pair_set = set(pairs_keys)
@@ -781,23 +782,22 @@ def _fetch_prices_bybit(pairs_keys):
                         "open_interest": float(t.get("openInterest", 0)),
                     })
             if prices:
-                return prices
-    except Exception:
-        pass
-    return None
+                return prices, None
+    except Exception as exc:
+        errors.append(f"exception: {exc}")
+    return None, "; ".join(errors) if errors else "unknown"
 
 
 def _fetch_prices_coingecko(pairs_keys):
     """Fallback: CoinGecko free API (no key needed, works from any IP)."""
     import requests as _req
-    # Map Bybit symbols → CoinGecko IDs
     _CG_MAP = {
         "BTCUSDT": "bitcoin", "ETHUSDT": "ethereum", "SOLUSDT": "solana",
         "BNBUSDT": "binancecoin", "XRPUSDT": "ripple",
     }
     cg_ids = [_CG_MAP[s] for s in pairs_keys if s in _CG_MAP]
     if not cg_ids:
-        return None
+        return None, "no matching CoinGecko IDs"
     try:
         url = "https://api.coingecko.com/api/v3/coins/markets"
         resp = _req.get(url, params={
@@ -806,7 +806,6 @@ def _fetch_prices_coingecko(pairs_keys):
         }, timeout=15)
         resp.raise_for_status()
         data = resp.json()
-        # Reverse map CoinGecko ID → Bybit symbol
         _REV = {v: k for k, v in _CG_MAP.items()}
         prices = []
         for coin in data:
@@ -819,12 +818,14 @@ def _fetch_prices_coingecko(pairs_keys):
                     "high_24h":      float(coin.get("high_24h", 0)),
                     "low_24h":       float(coin.get("low_24h", 0)),
                     "volume_24h":    float(coin.get("total_volume", 0)),
-                    "funding_rate":  0.0,   # CoinGecko doesn't have funding rate
-                    "open_interest": 0.0,   # CoinGecko doesn't have OI
+                    "funding_rate":  0.0,
+                    "open_interest": 0.0,
                 })
-        return prices if prices else None
-    except Exception:
-        return None
+        if prices:
+            return prices, None
+        return None, f"CoinGecko returned data but 0 matches (got {len(data)} coins)"
+    except Exception as exc:
+        return None, f"CoinGecko error: {exc}"
 
 
 @app.route("/api/crypto/live_prices")
@@ -834,19 +835,20 @@ def api_crypto_live_prices():
         from CRYPTO.config import CRYPTO_PAIRS
         pairs_keys = list(CRYPTO_PAIRS.keys())
 
-        # Try Bybit (primary + bytick.com fallback)
-        prices = _fetch_prices_bybit(pairs_keys)
+        prices, bybit_err = _fetch_prices_bybit(pairs_keys)
         source = "bybit"
 
-        # Fallback to CoinGecko if Bybit is blocked (403 on US servers)
         if not prices:
-            prices = _fetch_prices_coingecko(pairs_keys)
+            prices, cg_err = _fetch_prices_coingecko(pairs_keys)
             source = "coingecko"
 
         if not prices:
-            return jsonify({"error": "All price sources failed"}), 503
+            return jsonify({
+                "error": "All price sources failed",
+                "bybit_error": bybit_err,
+                "coingecko_error": cg_err,
+            }), 503
 
-        # Sort by configured order
         prices.sort(key=lambda x: pairs_keys.index(x["symbol"]) if x["symbol"] in pairs_keys else 99)
         return jsonify({"prices": prices, "count": len(prices), "source": source})
     except Exception as e:
