@@ -80,9 +80,10 @@ class CryptoDataFetcher:
     BASE_DELAY:    float = 1.0    # seconds
     MAX_DELAY:     float = 30.0   # seconds
 
-    # Errors that should NOT be retried (auth / bad params)
+    # Errors that should NOT be retried (auth / bad params / geo-block)
     _NO_RETRY_KEYWORDS = ("auth", "invalid", "permission", "apikey",
-                          "signature", "param", "not supported")
+                          "signature", "param", "not supported",
+                          "forbidden", "403")
 
     def _rate_limit(self) -> None:
         """Enforce minimum delay between requests. Mirrors EOS pattern."""
